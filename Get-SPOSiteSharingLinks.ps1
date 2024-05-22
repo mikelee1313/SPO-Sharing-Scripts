@@ -21,7 +21,7 @@
     Get-SitesUsers.ps1 -Tenant 'M365x13453069' -Admin 'admin@M365x13453069.onmicrosoft.com'
 
 .NOTES
-    Author: Mike Lee
+    Authors: Mike Lee, Kiran Bellala, Brian Mokaya
     Date: 5/22/2024
     Disclaimer: The sample scripts are provided AS IS without warranty of any kind. 
     Microsoft further disclaims all implied warranties including, without limitation, 
