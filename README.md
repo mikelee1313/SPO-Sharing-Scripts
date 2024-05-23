@@ -48,7 +48,9 @@ More information regarding Organization Wide Sharing Links
 Here are 3 sharable link types:
 
 •	People in [your organization]:  Gives anyone in your organization who has the link access to the file, whether they receive it directly from you or forwarded from someone else.
+
 •	People you choose gives access only to the people you specify, although other people may already have access. If people forward the sharing invitation, only people who already have access to the item will be able to use the link.  
+
 •	Anyone:  Gives access to anyone who receives this link, whether they receive it directly from you or forwarded from someone else. This may include people outside of your organization.
 
 Example of sharing a file with everyone in the organization (Organization Links):
@@ -69,4 +71,14 @@ Example:
 **AnonymousEdit** = Anyone Links
 **Flexible**: People you choose
 
-When using Org-wide sharing links,  you will see from above that the “SPGroup Users” only list a few users. These are the users that clicked the link.  Once a new user clicks the sharing link, they are dynamically added the “SPGroup Users” group. If a user is not listed this group, they will not automatically have access to the file and Copilot will not be able to discover this data during prompt response.
+Key Takeways:
+
+•	When viewing Org-wide sharing links, you may see a subset of users in the “SPGroup Users” column. These are the users that clicked (redeemed) the link. 
+
+•	Once a user clicks the sharing link (redeems the invitation), they are dynamically added the “SPGroup Users” group. 
+
+•	Company wide link invitations can be redeemed by clicking the link, e-mailing the link, or dropping the link in a Teams chat.
+
+•	If a user is not listed this group, they will not automatically have access to the file and Copilot will not be able to discover this data during prompt response.
+
+
