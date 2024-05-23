@@ -17,9 +17,6 @@
 .OUTPUTS
     The script exports the collected site information, including groups and users, to a CSV file.
 
-.EXAMPLE
-    Get-SitesUsers.ps1 -Tenant 'M365x13453069' -Admin 'admin@M365x13453069.onmicrosoft.com'
-
 .NOTES
     Authors: Mike Lee, Kiran Bellala, Brian Mokaya
     Date: 5/22/2024
