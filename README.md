@@ -61,7 +61,8 @@ When creating Organization Links at the file level, a Site level group is create
 
 **Group Parts:**
 
-Link Name.DocumentID.LinkType.GroupID
+**Link Name.DocumentID.LinkType.GroupID**
+
 SharingLinks.296ee70c-2c8f-466e-bb5d-45f8eb805b1f.OrganizationEdit.96fe2ee1-486b-41fe-a467-e2aa4b102d11
 
 
