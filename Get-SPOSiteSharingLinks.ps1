@@ -3,7 +3,7 @@
     Get-SPOSiteSharingLinks.ps1 - Loops through all sites and exports all groups and users for each site.
 
 .DESCRIPTION
-    This script connects to SharePoint Online and Exchange Online services to retrieve information about sites and their associated groups and users. It exports the collected data to a CSV file.
+    This script connects to SharePoint Online and Exchange Online services to retrieve Sharing Links associated with SharePoint Sites to help catalog and understand sites with potential oversharing.
 
 .PARAMETER Tenant
     Specifies the name of the tenant to connect to.
