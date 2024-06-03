@@ -169,7 +169,6 @@ foreach ($site in $sites) {
             $ExportItem  | Add-Member -MemberType NoteProperty -name "TeamsChannelType" -value ($($siteprops.TeamsChannelType) -join ',')
   
             $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Title" -value ($($Group.Title))
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Roles" -value ($($Group.Roles) -join ',')
             $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Users" -value ($($Group.Users) -join ',')
 
             $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Displayname" -value ($($AADGroups.DisplayName))
