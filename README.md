@@ -87,7 +87,7 @@ Key Takeways:
 
 # Get-SPOSiteGroupsandUsers.ps1
 
-This is extension to Get-SPOSiteSharingLinks but it will pull additional information for customers that need more details about who is in each group. This is especially helpful for customers with Information Barriers and would like to know what segments are assigned to the user found in the groups
+This is extension to Get-SPOSiteSharingLinks but it will pull additional information for customers that need more details about who is in each group. This is especially helpful for customers with Information Barriers and would like to know which segments are assigned to the users found in the groups
 
 Here is the list of data collected with this script:
 
