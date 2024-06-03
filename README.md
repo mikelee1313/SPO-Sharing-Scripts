@@ -92,34 +92,63 @@ This is extension to Get-SPOSiteSharingLinks but it will pull additional informa
 Here is the list of data collected with this script:
 
 •	URL	
+
 •	Owner	IB Mode	
+
 •	IB Segment	
+
 •	Group ID	
+
 •	RelatedGroupId	
+
 •	IsHubSite	
+
 •	Template	
+
 •	SiteDefinedSharingCapability	
+
 •	SharingCapability	
+
 •	DisableCompanyWideSharingLinks	
+
 •	IsTeamsConnected	
+
 •	IsTeamsChannelConnected	
+
 •	TeamsChannelType	
+
 •	SPGroup Title	
+
 •	SPGroup Roles	
+
 •	SPGroup Users
+
 •	SP Group User Name	
+
 •	SP Group User E-mail
+
 •	SP Group User InfoSegment
+
 •	Entra Group Displayname	
+
 •	Entra Group Alias	
+
 •	Entra Group AccessType	
+
 •	Entra Group ManagedBy	
+
 •	Entra Group WhenCreated	
+
 •	Entra Group Owners	
+
 •	Entra Group Owners Email	
+
 •	Entra Groups Owners InfoSegment	
+
 •	Entra Group Members	
+
 •	Entra Group Members Email	
+
 •	Entra Groups Member InfoSegment
 
 
