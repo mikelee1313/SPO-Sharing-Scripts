@@ -180,7 +180,6 @@ foreach ($site in $sites) {
         
             $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Owners" -value ($($groupowners.DisplayName) -join ',')
             $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Members" -value ($($groupmembers.DisplayName) -join ',')
-            #$ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Members E-Mail" -value ($($groupmembers | Select-Object @{Name = "Email"; Expression = { $_.EmailAddresses | Where-Object { $_ -like "SMTP:*" } } }))
             $output += $ExportItem
         }
     }
