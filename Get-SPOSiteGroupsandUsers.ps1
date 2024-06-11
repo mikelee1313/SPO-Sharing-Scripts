@@ -128,7 +128,7 @@ foreach ($site in $sites) {
         foreach ($groupowner in $groupowners) {
             try {
                 # Attempt to retrieve owner information
-                $gowner = Get-Recipient -Identity $groupmember | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
+                $gowner = Get-Recipient -Identity $groupowner | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
                 # Log owner information  
                 Write-LogEntry -LogName:$Log "Entra Group Owner is" $($gowner.DisplayName)
                 Write-LogEntry -LogName:$Log "Entra Group Owner E-Mail Address is" $($gowner.PrimarySmtpAddress)
@@ -136,8 +136,8 @@ foreach ($site in $sites) {
             }        
             catch {
                 # Print and log error message if unable to retrieve owner information
-                Write-Host "Unable to retrieve information for group owner: $groupmember" -ForegroundColor Red
-                Write-LogEntry -LogName:$Log -LogEntryText "Unable to retrieve information for group owner: $groupmember"
+                Write-Host "Unable to retrieve information for group owner: $groupowner" -ForegroundColor Red
+                Write-LogEntry -LogName:$Log -LogEntryText "Unable to retrieve information for group owner: $groupowner"
             }
         
         }   
@@ -151,7 +151,7 @@ foreach ($site in $sites) {
             
             try {
                 # Attempt to retrieve member information
-                $gmember = Get-Recipient -Identity $GroupUser | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
+                $gmember = Get-Recipient -Identity $groupmember | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
                 # Log member information    
                 Write-LogEntry -LogName:$Log "Entra Group Member is $($gmember.DisplayName)"
                 Write-LogEntry -LogName:$Log "Entra Group Member E-Mail Address is $($gmember.PrimarySmtpAddress)"
@@ -159,8 +159,8 @@ foreach ($site in $sites) {
             }
             catch {
                 # Print and log error message if unable to retrieve member information
-                Write-Host "Unable to retrieve information for group member: $GroupUser" -ForegroundColor Red
-                Write-LogEntry -LogName:$Log -LogEntryText "Unable to retrieve information for group member: $GroupUser"
+                Write-Host "Unable to retrieve information for group member: $groupmember" -ForegroundColor Red
+                Write-LogEntry -LogName:$Log -LogEntryText "Unable to retrieve information for group member: $groupmember"
             }
         }  
               
