@@ -204,7 +204,7 @@ foreach ($site in $sites) {
             $guser = @()
             # Attempt to retrieve user information
             try {
-                $guser = Get-Recipient -Identity $GroupUser.PrimarySmtpAddress | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
+                $guser = Get-Recipient -Identity $GroupUser | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
                 Write-LogEntry -LogName:$Log "User DisplayName is '$($guser.DisplayName)'"
                 Write-LogEntry -LogName:$Log "User E-Mail Address is  '$($guser.PrimarySmtpAddress)'"
                 Write-LogEntry -LogName:$Log "User InfoSegment is '$($guser.InformationBarrierSegments)'"
