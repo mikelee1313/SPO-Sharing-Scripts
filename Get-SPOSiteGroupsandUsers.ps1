@@ -128,7 +128,7 @@ foreach ($site in $sites) {
         foreach ($groupowner in $groupowners) {
             try {
                 # Attempt to retrieve owner information
-                $gowner = Get-Recipient -Identity $groupowner | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
+                $gowner = Get-Recipient -Identity $groupowner.PrimarySmtpAddress | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
                 # Log owner information  
                 Write-LogEntry -LogName:$Log "Entra Group Owner is" $($gowner.DisplayName)
                 Write-LogEntry -LogName:$Log "Entra Group Owner E-Mail Address is" $($gowner.PrimarySmtpAddress)
@@ -151,7 +151,7 @@ foreach ($site in $sites) {
             
             try {
                 # Attempt to retrieve member information
-                $gmember = Get-Recipient -Identity $groupmember | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
+                $gmember = Get-Recipient -Identity $groupmember.PrimarySmtpAddress | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
                 # Log member information    
                 Write-LogEntry -LogName:$Log "Entra Group Member is $($gmember.DisplayName)"
                 Write-LogEntry -LogName:$Log "Entra Group Member E-Mail Address is $($gmember.PrimarySmtpAddress)"
@@ -204,7 +204,7 @@ foreach ($site in $sites) {
             $guser = @()
             # Attempt to retrieve user information
             try {
-                $guser = Get-Recipient -Identity $GroupUser | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
+                $guser = Get-Recipient -Identity $GroupUser.PrimarySmtpAddress | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
                 Write-LogEntry -LogName:$Log "User DisplayName is '$($guser.DisplayName)'"
                 Write-LogEntry -LogName:$Log "User E-Mail Address is  '$($guser.PrimarySmtpAddress)'"
                 Write-LogEntry -LogName:$Log "User InfoSegment is '$($guser.InformationBarrierSegments)'"
