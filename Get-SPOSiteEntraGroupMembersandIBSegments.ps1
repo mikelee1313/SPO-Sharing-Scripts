@@ -1,6 +1,6 @@
 <#   
 .SYNOPSIS
-     Get-SPOSiteMembersandSegments.ps1 - Loops through all sites and exports all groups and users for each site.
+     Get-SPOSiteEntraGroupMembersandIBSegments.ps1 - Loops through all sites and exports all groups and users for each site.
 
 .DESCRIPTION
     This script connects to SharePoint Online and Exchange Online services to retrieve information about sites and their associated groups and users. It exports the collected data to a CSV file.
