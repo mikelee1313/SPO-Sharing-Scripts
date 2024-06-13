@@ -90,7 +90,6 @@ $sites = Import-csv -path $inputfile -Header 'URL'
 foreach ($site in $sites) {
 
     $AADGroups = @()
-    $groupowners = @()
     $groupmembers = @()
 
     Write-Host "Starting Site enumeration..."
@@ -117,11 +116,9 @@ foreach ($site in $sites) {
     $siteprops = get-sposite -Identity $site.url | Select-Object URL, Owner, InformationBarriersMode, InformationSegment, GroupId, RelatedGroupId, IsHubSite, Template, SiteDefinedSharingCapability, SharingCapability, DisableCompanyWideSharingLinks, IsTeamsConnected, IsTeamsChannelConnected, TeamsChannelType
 
     if ($siteprops.GroupId.Guid -ne '00000000-0000-0000-0000-000000000000') {
-        $groupowners = Get-UnifiedGroupLinks -Identity  $siteprops.GroupId -LinkType Owners
         $groupmembers = Get-UnifiedGroupLinks -Identity  $siteprops.GroupId -LinkType Members
-      
-        $gowner = @()
         $gmember = @()
+        
         # This script block iterates over each owner in a group.
         # For each owner, it attempts to retrieve the owner's display name, primary SMTP address, and information barrier segments using the Get-Recipient cmdlet.
         # The retrieved information is then logged using a custom Write-LogEntry function.
@@ -156,7 +153,6 @@ foreach ($site in $sites) {
                 $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Members Email" -value ($($gmember.PrimarySmtpAddress) -join ',')
                 $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Groups Member InfoSegment" -value ($($gmember.InformationBarrierSegments) -join ',')
                 $output += $ExportItem
-
 
             }
             catch {
