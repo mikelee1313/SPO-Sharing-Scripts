@@ -32,8 +32,8 @@
 #>
 
 #Configurable Settings
-$t = 'M365x13453069' # < - Your Tenant Name Here
-$admin = 'admin@M365x13453069.onmicrosoft.com'  # <- Your Admin Account Here
+$t = 'contoso' # < - Your Tenant Name Here
+$admin = 'admin@contoso.com'  # <- Your Admin Account Here
 
 
 #Initialize Parameters - Do not change
