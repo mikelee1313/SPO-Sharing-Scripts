@@ -32,6 +32,7 @@
 
 
 #Configurable Settings
+#Configurable Settings
 $t = 'contoso' # < - Your Tenant Name Here
 $admin = 'admin@contoso.com'  # <- Your Admin Account Here
 
@@ -170,41 +171,45 @@ foreach ($site in $sites) {
             #define spo-grid-all-users
             $allusers = $Group.Users -like '*spo-grid-all-users*'
 
+            #define Shared Links
+            $sharedlinks = $group.Title -like 'SharingLinks*'
+
             #Collecting Export Properties for CSV File
-            $ExportItem = New-Object PSObject
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "URL" -value ($($siteprops.url))
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "Owner" -value ($($siteprops.Owner))  
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "IB Mode" -value ($($siteprops.InformationBarriersMode) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "IB Segment" -value ($($siteprops.InformationSegment) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "Group ID" -value ($($siteprops.GroupId) -join ',')    
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "RelatedGroupId" -value ($($siteprops.RelatedGroupId) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "IsHubSite" -value ($($siteprops.IsHubSite) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "Template" -value ($($siteprops.Template) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "SiteDefinedSharingCapability" -value ($($siteprops.SiteDefinedSharingCapability) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "SharingCapability" -value ($($siteprops.SharingCapability) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "DisableCompanyWideSharingLinks" -value ($($siteprops.DisableCompanyWideSharingLinks) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "IsTeamsConnected" -value ($($siteprops.IsTeamsConnected) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "IsTeamsChannelConnected" -value ($($siteprops.IsTeamsChannelConnected) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "TeamsChannelType" -value ($($siteprops.TeamsChannelType) -join ',')
+            if ($guser) {
+                $ExportItem = New-Object PSObject
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "URL" -value ($($siteprops.url))
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "Owner" -value ($($siteprops.Owner))  
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "IB Mode" -value ($($siteprops.InformationBarriersMode) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "IB Segment" -value ($($siteprops.InformationSegment) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "Group ID" -value ($($siteprops.GroupId) -join ',')    
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "RelatedGroupId" -value ($($siteprops.RelatedGroupId) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "IsHubSite" -value ($($siteprops.IsHubSite) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "Template" -value ($($siteprops.Template) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "SiteDefinedSharingCapability" -value ($($siteprops.SiteDefinedSharingCapability) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "SharingCapability" -value ($($siteprops.SharingCapability) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "DisableCompanyWideSharingLinks" -value ($($siteprops.DisableCompanyWideSharingLinks) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "IsTeamsConnected" -value ($($siteprops.IsTeamsConnected) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "IsTeamsChannelConnected" -value ($($siteprops.IsTeamsChannelConnected) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "TeamsChannelType" -value ($($siteprops.TeamsChannelType) -join ',')
   
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Title" -value ($($Group.Title))
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Roles" -value ($($Group.Roles) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "Shared with Everyone" -value ($($allusers) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Title" -value ($($Group.Title))
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Roles" -value ($($Group.Roles) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "Shared with Everyone" -value ($($allusers) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "Shared Links" -value ($($sharedlinks) -join ',')
 
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "SP User Name" -value ($($guser.DisplayName))
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "SP User E-mail" -value ($($guser.PrimarySmtpAddress) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "SP Group User InfoSegment" -value ($($guser.InformationBarrierSegments) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "SP User Name" -value ($($guser.DisplayName))
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "SP User E-mail" -value ($($guser.PrimarySmtpAddress) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "SP Group User InfoSegment" -value ($($guser.InformationBarrierSegments) -join ',')
 
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Displayname" -value ($($AADGroups.DisplayName))
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Alias" -value ($($AADGroups.Alias) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group AccessType" -value ($($AADGroups.AccessType) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group ManagedBy" -value ($($AADGroups.ManagedBy) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group WhenCreated" -value ($($AADGroups.WhenCreated) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Displayname" -value ($($AADGroups.DisplayName))
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Alias" -value ($($AADGroups.Alias) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group AccessType" -value ($($AADGroups.AccessType) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group ManagedBy" -value ($($AADGroups.ManagedBy) -join ',')
+                $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group WhenCreated" -value ($($AADGroups.WhenCreated) -join ',')
 
-            $output += $ExportItem
+                $output += $ExportItem
+            }
         }
-       
-
     }
 
     #Removing Admin Account as a Site Collection Admin
