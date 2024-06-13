@@ -47,8 +47,8 @@ $date = Get-Date -Format yyyy-MM-dd_HH-mm-ss
 
 #Input / Output and Log Files
 $inputfile = 'C:\temp\sitelist.csv'
-$outputfile = "$env:TEMP\" + 'SiteInfo_' + $date + '_' + "output.csv"
-$log = "$env:TEMP\" + 'SiteInfo_' + $date + '_' + "logfile.log"
+$outputfile = "$env:TEMP\" + 'Site_Entra_Group_Owners_' + $date + '_' + "output.csv"
+$log = "$env:TEMP\" + 'Site_Entra_Group_Owners_' + $date + '_' + "logfile.log"
 
 #Connect to Services
 Connect-SPOService -Url ('https://' + $t + '-admin.sharepoint.com')
