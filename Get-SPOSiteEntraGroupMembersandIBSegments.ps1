@@ -1,6 +1,7 @@
 <#   
 .SYNOPSIS
-     Get-SPOSiteEntraGroupMembersandIBSegments.ps1 - Loops through all sites and exports all groups and users for each site.
+     Get-SPOSiteEntraGroupMembersandIBSegments.ps1 - Loops through all specified sites and exports all Entra level Group Members for each site. The output 
+    will also contain user information like email address and IB segments if applicable and site level information like IB Mode and Segments and access levels.
 
 .DESCRIPTION
     This script connects to SharePoint Online and Exchange Online services to retrieve information about sites and their associated groups and users. It exports the collected data to a CSV file.
