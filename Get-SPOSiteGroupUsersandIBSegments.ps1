@@ -189,7 +189,7 @@ foreach ($site in $sites) {
   
             $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Title" -value ($($Group.Title))
             $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Roles" -value ($($Group.Roles) -join ',')
-            $ExportItem  | Add-Member -MemberType NoteProperty -name "All Users" -value ($($allusers) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "Shared with Everyone" -value ($($allusers) -join ',')
 
             $ExportItem  | Add-Member -MemberType NoteProperty -name "SP User Name" -value ($($guser.DisplayName))
             $ExportItem  | Add-Member -MemberType NoteProperty -name "SP User E-mail" -value ($($guser.PrimarySmtpAddress) -join ',')
