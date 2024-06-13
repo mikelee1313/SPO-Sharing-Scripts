@@ -1,7 +1,6 @@
 <#   
 .SYNOPSIS
-    Get-SPOSiteSharingLinks.ps1 -  This script connects to SharePoint Online and Exchange Online services to retrieve Sharing Links associated with SharePoint Sites 
-    to help catalog and understand sites with potential oversharing.
+    Get-SPOSiteSharingLinks.ps1 -  Loops through all specified sites and exports any sites that contain Sharing Links, to help identify potential internal oversharing.
 
 .PARAMETER Tenant
     Specifies the name of the tenant to connect to.
