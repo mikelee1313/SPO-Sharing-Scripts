@@ -89,7 +89,6 @@ foreach ($site in $sites) {
 
     $AADGroups = @()
     $groupowners = @()
-    $groupmembers = @()
 
     Write-Host "Starting Site enumeration..."
     Write-LogEntry -LogName:$Log -LogEntryText "Starting Site enumeration..."
@@ -116,8 +115,6 @@ foreach ($site in $sites) {
 
     if ($siteprops.GroupId.Guid -ne '00000000-0000-0000-0000-000000000000') {
         $groupowners = Get-UnifiedGroupLinks -Identity  $siteprops.GroupId -LinkType Owners
-        $groupmembers = Get-UnifiedGroupLinks -Identity  $siteprops.GroupId -LinkType Members
-      
         $gowner = @()
         
         # This script block iterates over each owner in a group.
