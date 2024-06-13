@@ -119,7 +119,7 @@ foreach ($site in $sites) {
         $groupmembers = Get-UnifiedGroupLinks -Identity  $siteprops.GroupId -LinkType Members
       
         $gowner = @()
-        $gmember = @()
+        
         # This script block iterates over each owner in a group.
         # For each owner, it attempts to retrieve the owner's display name, primary SMTP address, and information barrier segments using the Get-Recipient cmdlet.
         # The retrieved information is then logged using a custom Write-LogEntry function.
