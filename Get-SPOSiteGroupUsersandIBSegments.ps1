@@ -1,9 +1,8 @@
 <#   
 .SYNOPSIS
-    Get-SPSiteGroupUsersandIBSegments.ps1 - Loops through all sites and exports all SharePoint level groups and users for each site.
-
-.DESCRIPTION
-    This script connects to SharePoint Online and Exchange Online services to retrieve information about sites and their associated groups and users. It exports the collected data to a CSV file.
+      Get-SPSiteGroupUsersandIBSegments.ps1 - Loops through all specified sites and exports all SharePoint level groups and users for each site as well as user
+      information like permission level and IB segments if applicable. The Script will also show any sites that are opened to everyone using the 
+      “spo-grid-all-users” permission level and any sites with Company Wide Sharing Links.
 
 .PARAMETER Tenant
     Specifies the name of the tenant to connect to.
