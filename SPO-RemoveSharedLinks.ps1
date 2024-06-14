@@ -1,5 +1,5 @@
 # Connect to your SharePoint site
-Connect-PnPOnline -Url https://m365x13453069.sharepoint.com/sites/Debra-Team-Ch1-Pri -interactive
+Connect-PnPOnline -Url https://contoso.sharepoint.com/sites/Team123 -interactive
  
 # Specify the library URL
 $libraryUrl = "Shared Documents"
