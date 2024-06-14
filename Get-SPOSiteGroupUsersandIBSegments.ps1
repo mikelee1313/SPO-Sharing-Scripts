@@ -204,7 +204,6 @@ foreach ($site in $sites) {
                 $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Displayname" -value ($($AADGroups.DisplayName))
                 $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Alias" -value ($($AADGroups.Alias) -join ',')
                 $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group AccessType" -value ($($AADGroups.AccessType) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group ManagedBy" -value ($($AADGroups.ManagedBy) -join ',')
                 $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group WhenCreated" -value ($($AADGroups.WhenCreated) -join ',')
 
                 $output += $ExportItem
