@@ -1,8 +1,7 @@
 <#   
 .SYNOPSIS
-      Get-SPOSiteSharingLinks.ps1 - Loops through all specified sites and exports all SharePoint level groups and users for each site as well as user
-      information like permission level and IB segments if applicable. The Script will also show any sites that are opened to everyone using the 
-      “spo-grid-all-users” permission level and any sites with Company Wide Sharing Links.
+    Get-SPOSiteSharingLinks.ps1 - Loops through all specified sites and exports all Sharing links for each site. 
+      If the SPGroup Users field is empty, this mean the sharing link was never clicked on (redeemed). 
 
 .PARAMETER Tenant
     Specifies the name of the tenant to connect to.
@@ -18,7 +17,7 @@
 
 .NOTES
     Authors: Mike Lee, Kiran Bellala, Brian Mokaya
-    Date: 6/13/2024
+    Date: 8/8/2024
     Disclaimer: The sample scripts are provided AS IS without warranty of any kind. 
     Microsoft further disclaims all implied warranties including, without limitation, 
     any implied warranties of merchantability or of fitness for a particular purpose. 
@@ -30,9 +29,8 @@
     to use the sample scripts or documentation, even if Microsoft has been advised of the possibility of such damages.
 #>
 
-
 #Configurable Settings
-$t = 'contoso' # < - Your Tenant Name Here
+$t = 'admin' # < - Your Tenant Name Here
 $admin = 'admin@contoso.com'  # <- Your Admin Account Here
 
 #Initialize Parameters - Do not change
@@ -153,56 +151,38 @@ foreach ($site in $sites) {
             # For each user, it attempts to retrieve the user's display name, primary SMTP address, and information barrier segments using the Get-Recipient cmdlet.
             # The retrieved information is then logged using a custom Write-LogEntry function.
             # If the script is unable to retrieve the information for a user, it prints an error message to the console and logs the error.  
-            ForEach ($GroupUser in $Group.Users) {
-       
-                $guser = @()
-                # Attempt to retrieve user information
-                try {
-                    $guser = Get-Recipient -Identity $GroupUser | Select-Object DisplayName, PrimarySmtpAddress, InformationBarrierSegments
-                    Write-LogEntry -LogName:$Log "User DisplayName is '$($guser.DisplayName)'"
-                    Write-LogEntry -LogName:$Log "User E-Mail Address is  '$($guser.PrimarySmtpAddress)'"
-                    Write-LogEntry -LogName:$Log "User InfoSegment is '$($guser.InformationBarrierSegments)'"
 
-                }
-                # Print and log error message if unable to retrieve user information
-                catch {
-                    Write-Host "Unable to retrieve information for user: $GroupUser" -ForegroundColor Red
-                    Write-LogEntry -LogName:$Log -LogEntryText "Unable to retrieve information for user: $GroupUser"
-                }
+
+            #Collecting Export Properties for CSV File
+            $ExportItem = New-Object PSObject
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "URL" -value ($($siteprops.url))
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "Owner" -value ($($siteprops.Owner))  
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "IB Mode" -value ($($siteprops.InformationBarriersMode) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "IB Segment" -value ($($siteprops.InformationSegment) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "Group ID" -value ($($siteprops.GroupId) -join ',')    
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "RelatedGroupId" -value ($($siteprops.RelatedGroupId) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "IsHubSite" -value ($($siteprops.IsHubSite) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "Template" -value ($($siteprops.Template) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "SiteDefinedSharingCapability" -value ($($siteprops.SiteDefinedSharingCapability) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "SharingCapability" -value ($($siteprops.SharingCapability) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "DisableCompanyWideSharingLinks" -value ($($siteprops.DisableCompanyWideSharingLinks) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "IsTeamsConnected" -value ($($siteprops.IsTeamsConnected) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "IsTeamsChannelConnected" -value ($($siteprops.IsTeamsChannelConnected) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "TeamsChannelType" -value ($($siteprops.TeamsChannelType) -join ',')
             
-                #define spo-grid-all-users
-                $allusers = $Group.Users -like '*spo-grid-all-users*'
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Title" -value ($($Group.Title) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Users" -value ($($Group.Users) -join ',')
 
-                #Collecting Export Properties for CSV File
-                $ExportItem = New-Object PSObject
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "URL" -value ($($siteprops.url))
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "Owner" -value ($($siteprops.Owner))  
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "IB Mode" -value ($($siteprops.InformationBarriersMode) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "IB Segment" -value ($($siteprops.InformationSegment) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "Group ID" -value ($($siteprops.GroupId) -join ',')    
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "RelatedGroupId" -value ($($siteprops.RelatedGroupId) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "IsHubSite" -value ($($siteprops.IsHubSite) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "Template" -value ($($siteprops.Template) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "SiteDefinedSharingCapability" -value ($($siteprops.SiteDefinedSharingCapability) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "SharingCapability" -value ($($siteprops.SharingCapability) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "DisableCompanyWideSharingLinks" -value ($($siteprops.DisableCompanyWideSharingLinks) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "IsTeamsConnected" -value ($($siteprops.IsTeamsConnected) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "IsTeamsChannelConnected" -value ($($siteprops.IsTeamsChannelConnected) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "TeamsChannelType" -value ($($siteprops.TeamsChannelType) -join ',')
-            
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Title" -value ($($Group.Title))
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "Group Owners" -value ($($groupowners.PrimarySmtpAddress) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "SPGroup Members" -value ($($groupmembers.PrimarySmtpAddress) -join ',')
 
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "SP User Name" -value ($($guser.DisplayName))
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "SP User E-mail" -value ($($guser.PrimarySmtpAddress) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "SP Group User InfoSegment" -value ($($guser.InformationBarrierSegments) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Displayname" -value ($($AADGroups.DisplayName))
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Alias" -value ($($AADGroups.Alias) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group AccessType" -value ($($AADGroups.AccessType) -join ',')
+            $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group WhenCreated" -value ($($AADGroups.WhenCreated) -join ',')
 
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Displayname" -value ($($AADGroups.DisplayName))
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group Alias" -value ($($AADGroups.Alias) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group AccessType" -value ($($AADGroups.AccessType) -join ',')
-                $ExportItem  | Add-Member -MemberType NoteProperty -name "Entra Group WhenCreated" -value ($($AADGroups.WhenCreated) -join ',')
+            $output += $ExportItem
 
-                $output += $ExportItem
-            }
         }
 
     }
