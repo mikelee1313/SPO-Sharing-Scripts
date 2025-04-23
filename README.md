@@ -11,31 +11,57 @@ The script consolidates this information into a structured format and exports it
 Output Headers Collected:
 
 URL	
+
 Owner	
+
 IB Mode	
+
 IB Segment	
+
 Group ID	
+
 RelatedGroupId	
+
 IsHubSite	
+
 Template	
+
 SiteDefinedSharingCapability	
+
 SharingCapability	
+
 DisableCompanyWideSharingLinks	
+
 Custom Script Allowed	
+
 IsTeamsConnected	
+
 IsTeamsChannelConnected	
+
 TeamsChannelType	
+
 Entra Group Displayname	
+
 Entra Group Alias	Entra Group 
+
 AccessType	
+
 Entra Group WhenCreated	
+
 Site Collection Admins (Name <Email>)	
+
 Has Sharing Links	
+
 Shared With Everyone	
+
 SP Groups On Site	
+
 SP Groups Roles	
+
 SP Users (Group: Name <Email>)	
+
 Entra Group Owners (Name <Email>)	
+
 Entra Group Members (Name <Email>)
 
 
