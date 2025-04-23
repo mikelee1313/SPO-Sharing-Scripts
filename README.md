@@ -9,7 +9,34 @@ For each site, it gathers comprehensive details including site properties, Share
 The script consolidates this information into a structured format and exports it to a CSV file for reporting and auditing purposes.
 
 Output Headers Collected:
-URL	Owner	IB Mode	IB Segment	Group ID	RelatedGroupId	IsHubSite	Template	SiteDefinedSharingCapability	SharingCapability	DisableCompanyWideSharingLinks	Custom Script Allowed	IsTeamsConnected	IsTeamsChannelConnected	TeamsChannelType	Entra Group Displayname	Entra Group Alias	Entra Group AccessType	Entra Group WhenCreated	Site Collection Admins (Name <Email>)	Has Sharing Links	Shared With Everyone	SP Groups On Site	SP Groups Roles	SP Users (Group: Name <Email>)	Entra Group Owners (Name <Email>)	Entra Group Members (Name <Email>)
+
+URL	
+Owner	
+IB Mode	
+IB Segment	
+Group ID	
+RelatedGroupId	
+IsHubSite	
+Template	
+SiteDefinedSharingCapability	
+SharingCapability	
+DisableCompanyWideSharingLinks	
+Custom Script Allowed	
+IsTeamsConnected	
+IsTeamsChannelConnected	
+TeamsChannelType	
+Entra Group Displayname	
+Entra Group Alias	Entra Group 
+AccessType	
+Entra Group WhenCreated	
+Site Collection Admins (Name <Email>)	
+Has Sharing Links	
+Shared With Everyone	
+SP Groups On Site	
+SP Groups Roles	
+SP Users (Group: Name <Email>)	
+Entra Group Owners (Name <Email>)	
+Entra Group Members (Name <Email>)
 
 
   
