@@ -8,7 +8,7 @@ For each site, it gathers comprehensive details including site properties, Share
 
 The script consolidates this information into a structured format and exports it to a CSV file for reporting and auditing purposes.
 
-Output Headers Collected:
+**Output Headers Collected:**
 
 URL	
 
@@ -66,7 +66,7 @@ Entra Group Members (Name <Email>)
 
 
   
-Output Examples:
+**Output Examples:**
 
 ![image](https://github.com/user-attachments/assets/de35fea2-496f-4831-bb1f-a626808e6269)
 
