@@ -41,7 +41,7 @@
 .NOTES
 
     Authors: Mike Lee
-    Date: 4/23/2024
+    Date: 5/5/25
 
     Requirements:
         - PnP.PowerShell module installed
@@ -175,7 +175,11 @@ Function Update-SiteCollectionData {
         [object] $AADGroups = $null,
         # --- Parameters for Site Collection Admins ---
         [string] $SiteAdminName = "",
-        [string] $SiteAdminEmail = ""
+        [string] $SiteAdminEmail = "",
+        # --- Parameters for Version Policy ---
+        [string] $DefaultTrimMode = "",
+        [int] $DefaultExpireAfterDays = -1,  # Changed from 0 to -1 as default
+        [int] $MajorVersionLimit = -1        # Changed from 0 to -1 as default
     )
 
     # Create site entry if it doesn't exist
@@ -196,6 +200,15 @@ Function Update-SiteCollectionData {
             "IsTeamsConnected"               = $SiteProperties.IsTeamsConnected
             "IsTeamsChannelConnected"        = $SiteProperties.IsTeamsChannelConnected
             "TeamsChannelType"               = $SiteProperties.TeamsChannelType
+            "StorageQuota"                   = if ($SiteProperties.StorageQuota) { $SiteProperties.StorageQuota } else { 0 }
+            "StorageUsageCurrent"            = if ($SiteProperties.StorageUsageCurrent) { $SiteProperties.StorageUsageCurrent } else { 0 }
+            "LockState"                      = $SiteProperties.LockState
+            "LastContentModifiedDate"        = $SiteProperties.LastContentModifiedDate
+            "ArchiveState"                   = $SiteProperties.ArchiveState
+            # Version Policy Settings - Set default values initially
+            "DefaultTrimMode"                = $DefaultTrimMode
+            "DefaultExpireAfterDays"         = $DefaultExpireAfterDays
+            "MajorVersionLimit"              = $MajorVersionLimit
             # Site-specific lists
             "SP Groups On Site"              = [System.Collections.Generic.List[string]]::new()
             "SP Group Roles Per Group"       = [System.Collections.Generic.Dictionary[string, string]]::new()
@@ -206,6 +219,22 @@ Function Update-SiteCollectionData {
             "Site Collection Admins"         = [System.Collections.Generic.List[PSObject]]::new() # Stores {Name, Email}
             "Has Sharing Links"              = $false # New property to track if sharing links are being used
             "Shared With Everyone"           = $false # New property to track if shared with everyone
+        }
+    }
+    else {
+        # If the site entry exists and version policy parameters are provided, update them
+        if (-not [string]::IsNullOrEmpty($DefaultTrimMode)) {
+            $siteCollectionData[$SiteUrl]["DefaultTrimMode"] = $DefaultTrimMode
+        }
+        
+        # Updated to handle zero values correctly
+        if ($DefaultExpireAfterDays -ge 0) {
+            $siteCollectionData[$SiteUrl]["DefaultExpireAfterDays"] = $DefaultExpireAfterDays
+        }
+        
+        # Updated to handle zero values correctly
+        if ($MajorVersionLimit -ge 0) {
+            $siteCollectionData[$SiteUrl]["MajorVersionLimit"] = $MajorVersionLimit
         }
     }
 
@@ -303,7 +332,7 @@ foreach ($site in $sites) {
     try {
         # Get Site Properties using the Admin connection context
         Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop # Ensure admin context
-        $siteprops = Get-PnPTenantSite -Identity $siteUrl | Select-Object Url, Owner, InformationBarrierMode, InformationBarrierSegments, GroupId, RelatedGroupId, IsHubSite, Template, SiteDefinedSharingCapability, SharingCapability, DisableCompanyWideSharingLinks, DenyAddAndCustomizePages, IsTeamsConnected, IsTeamsChannelConnected, TeamsChannelType
+        $siteprops = Get-PnPTenantSite -Identity $siteUrl | Select-Object Url, Owner, InformationBarrierMode, InformationBarrierSegments, GroupId, RelatedGroupId, IsHubSite, Template, SiteDefinedSharingCapability, SharingCapability, DisableCompanyWideSharingLinks, DenyAddAndCustomizePages, IsTeamsConnected, IsTeamsChannelConnected, TeamsChannelType, StorageQuota, StorageUsageCurrent, LockState, LastContentModifiedDate, ArchiveState
 
         if ($null -eq $siteprops) { Write-LogEntry -LogName $Log -LogEntryText "Failed to retrieve properties for site $siteUrl. Skipping."; continue }
 
@@ -317,6 +346,34 @@ foreach ($site in $sites) {
             Write-LogEntry -LogName $Log -LogEntryText "Successfully connected to specific site: $siteUrl"
         }
         catch { Write-LogEntry -LogName $Log -LogEntryText "ERROR: Could not connect to site $siteUrl. Skipping SP Group/User processing. $_"; continue }
+
+        # --- Version Policy Processing ---
+        try {
+            Write-LogEntry -LogName $Log -LogEntryText "Retrieving version policy for site $siteUrl"
+            $versionPolicy = Get-PnPSiteVersionPolicy
+            
+            if ($versionPolicy) {
+                Write-LogEntry -LogName $Log -LogEntryText "Successfully retrieved version policy for site $siteUrl"
+                
+                # Debug output to verify the actual values
+                Write-LogEntry -LogName $Log -LogEntryText "Version policy values - DefaultTrimMode: $($versionPolicy.DefaultTrimMode), DefaultExpireAfterDays: $($versionPolicy.DefaultExpireAfterDays), MajorVersionLimit: $($versionPolicy.MajorVersionLimit)"
+                
+                # Update site data with version policy details - Pass values explicitly to avoid type conversion issues
+                $expireDays = if ($null -eq $versionPolicy.DefaultExpireAfterDays) { -1 } else { [int]$versionPolicy.DefaultExpireAfterDays }
+                $versionLimit = if ($null -eq $versionPolicy.MajorVersionLimit) { -1 } else { [int]$versionPolicy.MajorVersionLimit }
+                
+                Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops `
+                    -DefaultTrimMode $versionPolicy.DefaultTrimMode `
+                    -DefaultExpireAfterDays $expireDays `
+                    -MajorVersionLimit $versionLimit
+            }
+            else {
+                Write-LogEntry -LogName $Log -LogEntryText "Warning: No version policy found for site $siteUrl"
+            }
+        }
+        catch {
+            Write-LogEntry -LogName $Log -LogEntryText "Error retrieving version policy for site $siteUrl : $_"
+        }
 
         # --- Site Collection Administrators Processing ---
         try {
@@ -541,6 +598,14 @@ foreach ($siteUrl in $siteCollectionData.Keys) {
         IsTeamsConnected                        = $siteData.IsTeamsConnected
         IsTeamsChannelConnected                 = $siteData.IsTeamsChannelConnected
         TeamsChannelType                        = $siteData.TeamsChannelType
+        "StorageQuota (MB)"                     = $siteData.StorageQuota
+        "StorageUsageCurrent (MB)"              = $siteData.StorageUsageCurrent
+        LockState                               = $siteData.LockState
+        LastContentModifiedDate                 = $siteData.LastContentModifiedDate
+        ArchiveState                            = $siteData.ArchiveState
+        DefaultTrimMode                         = $siteData.DefaultTrimMode
+        DefaultExpireAfterDays                  = $siteData.DefaultExpireAfterDays
+        MajorVersionLimit                       = $siteData.MajorVersionLimit
         "Entra Group Displayname"               = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".DisplayName } else { $null }
         "Entra Group Alias"                     = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".Alias } else { $null }
         "Entra Group AccessType"                = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".AccessType } else { $null }
@@ -563,7 +628,7 @@ if ($finalOutput.Count -gt 0) {
     Write-Host "Exporting $($finalOutput.Count) site records to CSV..." -ForegroundColor Green
     try {
         # Select the desired properties in the desired order for the CSV
-        $finalOutput | Select-Object URL, Owner, "IB Mode", "IB Segment", "Group ID", RelatedGroupId, IsHubSite, Template, SiteDefinedSharingCapability, SharingCapability, DisableCompanyWideSharingLinks, "Custom Script Allowed", IsTeamsConnected, IsTeamsChannelConnected, TeamsChannelType, "Entra Group Displayname", "Entra Group Alias", "Entra Group AccessType", "Entra Group WhenCreated", "Site Collection Admins (Name <Email>)", "Has Sharing Links", "Shared With Everyone", "SP Groups On Site", "SP Groups Roles", "SP Users (Group: Name <Email>)", "Entra Group Owners (Name <Email>)", "Entra Group Members (Name <Email>)" | Export-Csv -Path $outputfile -NoTypeInformation -Encoding UTF8
+        $finalOutput | Select-Object URL, Owner, "IB Mode", "IB Segment", "Group ID", RelatedGroupId, IsHubSite, Template, SiteDefinedSharingCapability, SharingCapability, DisableCompanyWideSharingLinks, "Custom Script Allowed", IsTeamsConnected, IsTeamsChannelConnected, TeamsChannelType, "StorageQuota (MB)", "StorageUsageCurrent (MB)", LockState, LastContentModifiedDate, ArchiveState, DefaultTrimMode, DefaultExpireAfterDays, MajorVersionLimit, "Entra Group Displayname", "Entra Group Alias", "Entra Group AccessType", "Entra Group WhenCreated", "Site Collection Admins (Name <Email>)", "Has Sharing Links", "Shared With Everyone", "SP Groups On Site", "SP Groups Roles", "SP Users (Group: Name <Email>)", "Entra Group Owners (Name <Email>)", "Entra Group Members (Name <Email>)" | Export-Csv -Path $outputfile -NoTypeInformation -Encoding UTF8
         Write-Host "Output successfully written to: $outputfile" -ForegroundColor Green
         Write-LogEntry -LogName $Log -LogEntryText "Output successfully written to: $outputfile"
     }
