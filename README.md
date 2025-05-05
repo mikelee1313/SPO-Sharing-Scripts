@@ -4,9 +4,7 @@
 
 This script connects to a SharePoint tenant using PnP PowerShell with certificate-based authentication.  It retrieves a list of SharePoint sites either from a provided CSV file or directly from the tenant. 
 
-For each site, it gathers comprehensive details including site properties, SharePoint groups and their roles, SharePoint users, Microsoft 365 group details (if applicable), group owners and members, and site collection administrators. 
-
-The script collects and consolidates a variety of information into the output CSV file. Below is the list of columns that are included in the final output file:
+The script collects and consolidates a variety of information into the output CSV file. Below is the list of columns that are included the output file:
 
 **Site Information**
 - URL - The URL of the SharePoint site.
