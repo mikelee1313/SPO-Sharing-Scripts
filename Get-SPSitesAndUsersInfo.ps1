@@ -604,8 +604,8 @@ foreach ($siteUrl in $siteCollectionData.Keys) {
         LastContentModifiedDate                 = $siteData.LastContentModifiedDate
         ArchiveState                            = $siteData.ArchiveState
         DefaultTrimMode                         = $siteData.DefaultTrimMode
-        DefaultExpireAfterDays                  = $siteData.DefaultExpireAfterDays
-        MajorVersionLimit                       = $siteData.MajorVersionLimit
+        DefaultExpireAfterDays                  = if ($siteData.DefaultExpireAfterDays -eq -1) { "NotSet" } else { $siteData.DefaultExpireAfterDays }
+        MajorVersionLimit                       = if ($siteData.MajorVersionLimit -eq -1) { "NotSet" } else { $siteData.MajorVersionLimit }
         "Entra Group Displayname"               = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".DisplayName } else { $null }
         "Entra Group Alias"                     = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".Alias } else { $null }
         "Entra Group AccessType"                = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".AccessType } else { $null }
