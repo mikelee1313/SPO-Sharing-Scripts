@@ -50,7 +50,7 @@ The script collects and consolidates a variety of information into the output CS
 - SP Groups On Site - List of SharePoint groups on the site.
 - SP Groups Roles - Roles assigned to the SharePoint groups.
 
-**Combined Columns**
+**Site Users**
 - SP Users (Group: Name <Email>) - List of SharePoint users, grouped by associated SharePoint groups, in the format "Group:Name <Email>".
 - Entra Group Owners (Name <Email>) - List of Microsoft 365 Group owners in the format "Name <Email>".
 - Entra Group Members (Name <Email>) - List of Microsoft 365 Group members in the format "Name <Email>".
