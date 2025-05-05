@@ -40,7 +40,7 @@ The script collects and consolidates a variety of information into the output CS
 - Entra Group WhenCreated - Creation date of the Microsoft 365 Group.
 
 **Site Collection Administrators**
-Site Collection Admins (Name <Email>) - List of site collection administrators in the format "Name <Email>".
+- Site Collection Admins (Name <Email>) - List of site collection administrators in the format "Name <Email>".
 
 **Sharing Indicators**
 - Has Sharing Links - Indicates if there are sharing links.
