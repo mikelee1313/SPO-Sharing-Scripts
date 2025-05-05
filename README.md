@@ -6,64 +6,56 @@ This script connects to a SharePoint tenant using PnP PowerShell with certificat
 
 For each site, it gathers comprehensive details including site properties, SharePoint groups and their roles, SharePoint users, Microsoft 365 group details (if applicable), group owners and members, and site collection administrators. 
 
-The script consolidates this information into a structured format and exports it to a CSV file for reporting and auditing purposes.
+The script collects and consolidates a variety of information into the output CSV file. Below is the list of columns that are included in the final output file:
 
-**Output Headers Collected:**
+**Site Information**
+URL - The URL of the SharePoint site.
+Owner - The owner of the site.
+IB Mode - Information Barrier (IB) mode for the site.
+IB Segment - Information Barrier segments for the site.
+Group ID - Microsoft 365 Group ID associated with the site (if applicable).
+RelatedGroupId - Related Group ID for the site (if applicable).
+IsHubSite - Indicates if the site is a Hub Site.
+Template - The template used for the site.
+SiteDefinedSharingCapability - Site-defined sharing capability.
+SharingCapability - Overall sharing capability for the site.
+DisableCompanyWideSharingLinks - Indicates if company-wide sharing links are disabled.
+Custom Script Allowed - Indicates if custom scripts are allowed.
+IsTeamsConnected - Indicates if the site is connected to Microsoft Teams.
+IsTeamsChannelConnected - Indicates if the site has a connected Teams channel.
+TeamsChannelType - Type of Teams channel connected to the site.
+StorageQuota (MB) - Total storage quota of the site in MB.
+StorageUsageCurrent (MB) - Current storage usage of the site in MB.
+LockState - Lock state of the site.
+LastContentModifiedDate - Last content modification date of the site.
+ArchiveState - Archive state of the site.
 
-URL	
+**Version Policy**
+DefaultTrimMode - Default trim mode for versioning.
+DefaultExpireAfterDays - The lifespan of items before they expire (if set).
+MajorVersionLimit - Limit on the number of major versions stored.
 
-Owner	
+**Microsoft 365 Group Details**
+Entra Group Displayname - Display name of the associated Entra (Microsoft 365) Group.
+Entra Group Alias - Alias of the associated Microsoft 365 Group.
+Entra Group AccessType - Access type (e.g., public or private) of the Microsoft 365 Group.
+Entra Group WhenCreated - Creation date of the Microsoft 365 Group.
 
-IB Mode	
+**Site Collection Administrators**
+Site Collection Admins (Name <Email>) - List of site collection administrators in the format "Name <Email>".
 
-IB Segment	
+**Sharing Indicators**
+Has Sharing Links - Indicates if there are sharing links.
+Shared With Everyone - Indicates if the site is shared with "Everyone."
 
-Group ID	
+**SharePoint Groups**
+SP Groups On Site - List of SharePoint groups on the site.
+SP Groups Roles - Roles assigned to the SharePoint groups.
 
-RelatedGroupId	
-
-IsHubSite	
-
-Template	
-
-SiteDefinedSharingCapability	
-
-SharingCapability	
-
-DisableCompanyWideSharingLinks	
-
-Custom Script Allowed	
-
-IsTeamsConnected	
-
-IsTeamsChannelConnected	
-
-TeamsChannelType	
-
-Entra Group Displayname	
-
-Entra Group Alias	Entra Group 
-
-AccessType	
-
-Entra Group WhenCreated	
-
-Site Collection Admins (Name <Email>)	
-
-Has Sharing Links	
-
-Shared With Everyone	
-
-SP Groups On Site	
-
-SP Groups Roles	
-
-SP Users (Group: Name <Email>)	
-
-Entra Group Owners (Name <Email>)	
-
-Entra Group Members (Name <Email>)
-
+**Combined Columns**
+SP Users (Group: Name <Email>) - List of SharePoint users, grouped by associated SharePoint groups, in the format "Group:Name <Email>".
+Entra Group Owners (Name <Email>) - List of Microsoft 365 Group owners in the format "Name <Email>".
+Entra Group Members (Name <Email>) - List of Microsoft 365 Group members in the format "Name <Email>".
 
   
 **Output Examples:**
