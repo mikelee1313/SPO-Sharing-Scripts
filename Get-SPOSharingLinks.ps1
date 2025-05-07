@@ -84,7 +84,7 @@ $date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 # ----------------------------------------------
 # Input / Output and Log Files
 # ----------------------------------------------
-#$inputfile = 'C:\temp\sitelist.csv'
+#$inputfile = 'C:\temp\sitelist.csv' #comment this line to run against all SPO Sites, otherwise use an input file.
 $outputfile = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "incremental.csv"
 $log = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "logfile.log"
 # Initialize sharing links output file
