@@ -1,4 +1,4 @@
-# Get-SPOSiteSharingLinks
+# SPO SharingLinks Information
 
 Lots of customers are in the process of getting ready for Copilot and identifying internal oversharing is a requirement for Copilot readiness and deployment. The main purpose of this script is to read the Sharing Links groups at the site collection level, to help customers identify potential internal oversharing in their tenant.
 This script will use multiple site inputs, like "Get-SPOSite" filtering OneDrive or SPO Sites or a list of URLs from a site list.
