@@ -13,7 +13,7 @@
 .NOTES
     File Name      : Get-SPOSharingLinks.ps1
     Author         : Mike Lee
-    Date Created   : 5/5/25
+    Date Created   : 5/7/25
     Prerequisite   : PnP PowerShell module, App registration in Entra ID with certificate
 
 .Disclaimer: The sample scripts are provided AS IS without warranty of any kind. 
