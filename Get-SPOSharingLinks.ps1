@@ -84,9 +84,11 @@ $date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 # ----------------------------------------------
 # Input / Output and Log Files
 # ----------------------------------------------
-$inputfile = 'C:\temp\sitelist.csv'
-$outputfile = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "output.csv"
+#$inputfile = 'C:\temp\sitelist.csv'
+$outputfile = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "incremental.csv"
 $log = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "logfile.log"
+# Initialize sharing links output file
+$sharingLinksOutputFile = "$env:TEMP\" + 'SPO_SharingLinks_' + $date + '.csv'
 
 # ----------------------------------------------
 # Logging Function
@@ -110,6 +112,98 @@ $connectionParams = @{
     Thumbprint    = $thumbprint
     Tenant        = $tenant
     WarningAction = 'SilentlyContinue'
+}
+
+# ----------------------------------------------
+# Throttling Handling Function
+# ----------------------------------------------
+Function Invoke-WithThrottleHandling {
+    param (
+        [Parameter(Mandatory = $true)]
+        [scriptblock] $ScriptBlock,
+        
+        [Parameter(Mandatory = $false)]
+        [int] $MaxRetries = 5,
+        
+        [Parameter(Mandatory = $false)]
+        [string] $Operation = "SharePoint Operation"
+    )
+    
+    $retryCount = 0
+    $success = $false
+    $result = $null
+    
+    while (-not $success -and $retryCount -le $MaxRetries) {
+        try {
+            $result = & $ScriptBlock
+            $success = $true
+        }
+        catch {
+            $errorMessage = $_.Exception.Message
+            
+            # Check if this is a throttling error
+            $isThrottling = $false
+            $waitTime = 10 # Default wait time in seconds
+            
+            # Check for common throttling status codes
+            if ($_.Exception.Response -ne $null) {
+                $statusCode = [int]$_.Exception.Response.StatusCode
+                
+                if ($statusCode -eq 429 -or $statusCode -eq 503) {
+                    $isThrottling = $true
+                    
+                    # Try to get the Retry-After header
+                    $retryAfterHeader = $_.Exception.Response.Headers["Retry-After"]
+                    
+                    if ($retryAfterHeader) {
+                        $waitTime = [int]$retryAfterHeader
+                        Write-LogEntry -LogName $Log -LogEntryText "Throttling detected for $Operation. Retry-After header: $waitTime seconds."
+                    }
+                    else {
+                        # Use exponential backoff if no Retry-After header
+                        $waitTime = [Math]::Pow(2, $retryCount) * 10
+                        Write-LogEntry -LogName $Log -LogEntryText "Throttling detected for $Operation. No Retry-After header. Using backoff: $waitTime seconds."
+                    }
+                }
+            }
+            # PnP specific throttling detection
+            elseif ($errorMessage -match "throttl|Too many requests|429|503|Request limit exceeded") {
+                $isThrottling = $true
+                
+                # Extract wait time from error message if available
+                if ($errorMessage -match "Try again in (\d+) (seconds|minutes)") {
+                    $timeValue = [int]$matches[1]
+                    $timeUnit = $matches[2]
+                    
+                    $waitTime = if ($timeUnit -eq "minutes") { $timeValue * 60 } else { $timeValue }
+                    Write-LogEntry -LogName $Log -LogEntryText "PnP throttling detected for $Operation. Waiting for $waitTime seconds."
+                }
+                else {
+                    # Use exponential backoff
+                    $waitTime = [Math]::Pow(2, $retryCount) * 10
+                    Write-LogEntry -LogName $Log -LogEntryText "PnP throttling detected for $Operation. Using backoff: $waitTime seconds."
+                }
+            }
+            
+            if ($isThrottling) {
+                $retryCount++
+                
+                if ($retryCount -le $MaxRetries) {
+                    Write-Host "  Throttling detected for $Operation. Retrying in $waitTime seconds... (Attempt $retryCount of $MaxRetries)" -ForegroundColor Yellow
+                    Write-LogEntry -LogName $Log -LogEntryText "Waiting $waitTime seconds before retry #$retryCount for $Operation."
+                    Start-Sleep -Seconds $waitTime
+                    continue
+                }
+            }
+            
+            # If we reach here, it's either not throttling or we've exceeded retries
+            Write-Host "Error in $Operation (Retry #$retryCount): $errorMessage" -ForegroundColor Red
+            Write-LogEntry -LogName $Log -LogEntryText "Error in $Operation (Retry #$retryCount): $errorMessage"
+            throw
+        }
+    }
+    
+    return $result
 }
 
 # ----------------------------------------------
@@ -147,7 +241,10 @@ else {
     try {
         # Ensure we are connected to Admin Center before this call
         Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop
-        $sites = Get-PnPTenantSite # Excludes OneDrive by default
+        $sites = Invoke-WithThrottleHandling -ScriptBlock {
+            Get-PnPTenantSite
+        } -Operation "Get-PnPTenantSite"
+        
         Write-Host "Found $($sites.Count) sites." -ForegroundColor Green
         Write-LogEntry -LogName $Log -LogEntryText "Retrieved $($sites.Count) sites using Get-PnPTenantSite."
     }
@@ -162,6 +259,13 @@ else {
 # Initialize a hashtable to store site collection data (keyed by URL)
 # ----------------------------------------------
 $siteCollectionData = @{}
+
+# ----------------------------------------------
+# Initialize the sharing links output file with headers
+# ----------------------------------------------
+$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,IsTeamsConnected,SharingCapability,Last Content Modified"
+Set-Content -Path $sharingLinksOutputFile -Value $sharingLinksHeaders
+Write-LogEntry -LogName $Log -LogEntryText "Initialized sharing links output file: $sharingLinksOutputFile"
 
 # ----------------------------------------------
 # Function to handle consolidated site data
@@ -222,10 +326,71 @@ Function Update-SiteCollectionData {
 }
 
 # ----------------------------------------------
+# Function to process and write sharing links for a site
+# ----------------------------------------------
+Function Process-SiteSharingLinks {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $SiteUrl,
+        [object] $SiteData
+    )
+    
+    # Check if this site has sharing links groups
+    $sharingLinkGroups = $SiteData."SP Groups On Site" | Where-Object { $_ -like "SharingLinks*" }
+    
+    if ($sharingLinkGroups.Count -gt 0) {
+        Write-Host "  Processing $($sharingLinkGroups.Count) sharing link groups for site: $SiteUrl" -ForegroundColor Yellow
+        Write-LogEntry -LogName $Log -LogEntryText "Processing $($sharingLinkGroups.Count) sharing link groups for site: $SiteUrl"
+        
+        foreach ($sharingGroup in $sharingLinkGroups) {
+            # Get users in this sharing links group
+            $groupMembers = $SiteData."SP Users" | Where-Object { $_.AssociatedSPGroup -eq $sharingGroup }
+            
+            if ($groupMembers.Count -gt 0) {
+                # Format members as "Name <Email>"
+                $membersFormatted = ($groupMembers | ForEach-Object {
+                        $emailStr = if ($_.Email) { $_.Email | Out-String -NoNewline } else { "" }
+                        "$($_.Name) <$emailStr>"
+                    }) -join ';'
+                
+                # Get document details if available
+                $documentUrl = "Not found"
+                $documentOwner = "Not found"
+                if ($SiteData.ContainsKey("DocumentDetails") -and $SiteData["DocumentDetails"].ContainsKey($sharingGroup)) {
+                    $documentUrl = $SiteData["DocumentDetails"][$sharingGroup]["DocumentUrl"]
+                    $documentOwner = $SiteData["DocumentDetails"][$sharingGroup]["DocumentOwner"]
+                }
+                
+                # Create CSV line
+                $csvLine = [PSCustomObject]@{
+                    "Site URL"              = $SiteData.URL
+                    "Site Owner"            = $SiteData.Owner
+                    "IB Mode"               = $SiteData."IB Mode"
+                    "IB Segment"            = $SiteData."IB Segment"
+                    "Site Template"         = $SiteData.Template
+                    "Sharing Group Name"    = $sharingGroup
+                    "Sharing Link Members"  = $membersFormatted
+                    "File URL"              = $documentUrl
+                    "File Owner"            = $documentOwner
+                    "IsTeamsConnected"      = $SiteData.IsTeamsConnected
+                    "SharingCapability"     = $SiteData.SharingCapability
+                    "Last Content Modified" = $SiteData.LastContentModifiedDate
+                }
+                
+                # Write directly to the CSV file
+                $csvLine | Export-Csv -Path $sharingLinksOutputFile -Append -NoTypeInformation -Force
+                Write-LogEntry -LogName $Log -LogEntryText "  Wrote sharing link data for group: $sharingGroup"
+            }
+        }
+    }
+}
+
+# ----------------------------------------------
 # Main Processing Loop
 # ----------------------------------------------
 $totalSites = $sites.Count
 $processedCount = 0
+$sitesWithSharingLinksCount = 0
 
 foreach ($site in $sites) {
     $processedCount++
@@ -237,7 +402,9 @@ foreach ($site in $sites) {
     try {
         # Get Site Properties using the Admin connection context
         Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop # Ensure admin context
-        $siteprops = Get-PnPTenantSite -Identity $siteUrl | 
+        $siteprops = Invoke-WithThrottleHandling -ScriptBlock {
+            Get-PnPTenantSite -Identity $siteUrl
+        } -Operation "Get-PnPTenantSite for $siteUrl" | 
         Select-Object Url, Owner, InformationBarrierMode, InformationBarrierSegments, 
         Template, SharingCapability, IsTeamsConnected, LastContentModifiedDate
 
@@ -255,7 +422,10 @@ foreach ($site in $sites) {
             Write-LogEntry -LogName $Log -LogEntryText "Successfully connected to site: $siteUrl"
             
             # SharePoint Group Processing
-            $spGroups = Get-PnPGroup
+            $spGroups = Invoke-WithThrottleHandling -ScriptBlock {
+                Get-PnPGroup
+            } -Operation "Get-PnPGroup for $siteUrl"
+            
             Write-LogEntry -LogName $Log -LogEntryText "Found $($spGroups.Count) SP Groups on $siteUrl"
             
             ForEach ($spGroup in $spGroups) {
@@ -269,13 +439,17 @@ foreach ($site in $sites) {
                     
                     # Get SP Group Members for sharing links groups only
                     if ($spGroup.Id) { 
-                        $spGroupMembers = Get-PnPGroupMember -Identity $spGroup.Id
+                        $spGroupMembers = Invoke-WithThrottleHandling -ScriptBlock {
+                            Get-PnPGroupMember -Identity $spGroup.Id
+                        } -Operation "Get-PnPGroupMember for group $($spGroup.Title)"
                         
                         foreach ($member in $spGroupMembers) {
                             if (!$member -or !$member.LoginName) { continue }
                             
                             try {
-                                $pnpUser = Get-PnPUser -Identity $member.LoginName -ErrorAction SilentlyContinue
+                                $pnpUser = Invoke-WithThrottleHandling -ScriptBlock {
+                                    Get-PnPUser -Identity $member.LoginName -ErrorAction SilentlyContinue
+                                } -Operation "Get-PnPUser for $($member.LoginName)"
                                 
                                 if ($pnpUser) {
                                     $spUserName = $pnpUser.Title
@@ -311,7 +485,9 @@ foreach ($site in $sites) {
                             # Try to find the document using Microsoft Graph Search API
                             try {
                                 # Get an access token for Microsoft Graph
-                                $graphToken = Get-PnPGraphAccessToken
+                                $graphToken = Invoke-WithThrottleHandling -ScriptBlock {
+                                    Get-PnPGraphAccessToken
+                                } -Operation "Get-PnPGraphAccessToken"
                                 
                                 if ($graphToken) {
                                     # Prepare headers with the access token
@@ -341,10 +517,13 @@ foreach ($site in $sites) {
                                     # Convert the hashtable to JSON
                                     $searchBody = $searchQuery | ConvertTo-Json -Depth 5
                                     
-                                    # Execute the search query
+                                    # Execute the search query with throttling handling
                                     Write-LogEntry -LogName $Log -LogEntryText "Executing Microsoft Graph search for document ID: $documentId"
                                     $searchUrl = "https://graph.microsoft.com/v1.0/search/query"
-                                    $searchResults = Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Post -Body $searchBody
+                                    
+                                    $searchResults = Invoke-WithThrottleHandling -ScriptBlock {
+                                        Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Post -Body $searchBody
+                                    } -Operation "Microsoft Graph Search API call for document ID $documentId"
                                     
                                     # Process search results
                                     $documentUrl = "Unable to locate document across tenant"
@@ -413,6 +592,12 @@ foreach ($site in $sites) {
                     }
                 }
             }
+
+            # Process and write sharing links data for this site immediately if any found
+            if ($siteCollectionData[$siteUrl]["Has Sharing Links"]) {
+                Process-SiteSharingLinks -SiteUrl $siteUrl -SiteData $siteCollectionData[$siteUrl]
+                $sitesWithSharingLinksCount++
+            }
         }
         catch { 
             Write-LogEntry -LogName $Log -LogEntryText "Could not connect to site $siteUrl : ${_}" 
@@ -449,85 +634,22 @@ foreach ($siteUrl in $siteCollectionData.Keys) {
     $finalOutput.Add($exportItem)
 }
 
+# Export the main site collection data
+$finalOutput | Export-Csv -Path $outputfile -NoTypeInformation -Encoding UTF8
+Write-Host "Site collection data successfully written to: $outputfile" -ForegroundColor Green
+Write-LogEntry -LogName $Log -LogEntryText "Site collection data successfully written to: $outputfile"
+
 # ----------------------------------------------
-# Output sharing links related data
+# Output sharing links summary
 # ----------------------------------------------
-if ($finalOutput.Count -gt 0) {
-    Write-Host "Processing sharing links data for output..." -ForegroundColor Green
-    try {
-        $sharingLinksOutput = [System.Collections.Generic.List[PSObject]]::new()
-        
-        # Filter to only sites with sharing links
-        $sitesWithSharingLinks = $finalOutput | Where-Object { $_."Has Sharing Links" -eq "True" }
-        
-        if ($sitesWithSharingLinks.Count -gt 0) {
-            Write-Host "Found $($sitesWithSharingLinks.Count) site collections with sharing links" -ForegroundColor Green
-            
-            foreach ($site in $sitesWithSharingLinks) {
-                $siteUrl = $site.URL
-                $siteData = $siteCollectionData[$siteUrl]
-                
-                # Get all sharing links groups from this site
-                $sharingLinkGroups = $siteData."SP Groups On Site" | Where-Object { $_ -like "SharingLinks*" }
-                
-                foreach ($sharingGroup in $sharingLinkGroups) {
-                    # Get users in this sharing links group
-                    $groupMembers = $siteData."SP Users" | Where-Object { $_.AssociatedSPGroup -eq $sharingGroup }
-                    
-                    if ($groupMembers.Count -gt 0) {
-                        # Format members as "Name <Email>"
-                        $membersFormatted = ($groupMembers | ForEach-Object {
-                                $emailStr = $_.Email | Out-String -NoNewline
-                                "$($_.Name) <$emailStr>"
-                            }) -join ';'
-                        
-                        # Get document details if available
-                        $documentUrl = "Not found"
-                        $documentOwner = "Not found"
-                        if ($siteData.ContainsKey("DocumentDetails") -and $siteData["DocumentDetails"].ContainsKey($sharingGroup)) {
-                            $documentUrl = $siteData["DocumentDetails"][$sharingGroup]["DocumentUrl"]
-                            $documentOwner = $siteData["DocumentDetails"][$sharingGroup]["DocumentOwner"]
-                        }
-                        
-                        # Create output item for this sharing link group
-                        $sharingLinkItem = [PSCustomObject]@{
-                            "Site URL"              = $site.URL
-                            "Site Owner"            = $site.Owner
-                            "IB Mode"               = $site."IB Mode"
-                            "IB Segment"            = $site."IB Segment"
-                            "Site Template"         = $site.Template
-                            "Sharing Group Name"    = $sharingGroup
-                            "Sharing Link Members"  = $membersFormatted
-                            "File URL"              = $documentUrl
-                            "File Owner"            = $documentOwner
-                            "IsTeamsConnected"      = $site.IsTeamsConnected
-                            "SharingCapability"     = $site.SharingCapability
-                            "Last Content Modified" = $site.LastContentModifiedDate
-                        }
-                        
-                        $sharingLinksOutput.Add($sharingLinkItem)
-                    }
-                }
-            }
-            
-            if ($sharingLinksOutput.Count -gt 0) {
-                $sharingLinksOutputFile = "$env:TEMP\" + 'SPO_SharingLinks_' + $date + '.csv'
-                $sharingLinksOutput | Export-Csv -Path $sharingLinksOutputFile -NoTypeInformation -Encoding UTF8
-                Write-Host "Sharing links data successfully written to: $sharingLinksOutputFile" -ForegroundColor Green
-                Write-LogEntry -LogName $Log -LogEntryText "Sharing links data successfully written to: $sharingLinksOutputFile"
-            }
-            else {
-                Write-Host "No detailed sharing links information found to export." -ForegroundColor Yellow
-            }
-        }
-        else {
-            Write-Host "No site collections with sharing links found." -ForegroundColor Yellow
-        }
-    }
-    catch {
-        Write-Host "Error processing sharing links output: $($_)" -ForegroundColor Red
-        Write-LogEntry -LogName $Log -LogEntryText "Error processing sharing links output: $($_)"
-    }
+if ($sitesWithSharingLinksCount -gt 0) {
+    Write-Host "Found $sitesWithSharingLinksCount site collections with sharing links" -ForegroundColor Green
+    Write-Host "Sharing links data written incrementally to: $sharingLinksOutputFile" -ForegroundColor Green
+    Write-LogEntry -LogName $Log -LogEntryText "Total sites with sharing links: $sitesWithSharingLinksCount"
+}
+else {
+    Write-Host "No site collections with sharing links found." -ForegroundColor Yellow
+    Write-LogEntry -LogName $Log -LogEntryText "No site collections with sharing links found."
 }
 
 # ----------------------------------------------
