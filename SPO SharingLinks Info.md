@@ -5,46 +5,6 @@ This script will use multiple site inputs, like "Get-SPOSite" filtering OneDrive
 
 **Important:** The main loop is using Get-SPOSiteGroup to loop through all SharePoint Site groups and users. However, you need to be a Site Collection Admin to read this data, so please be aware that the script will add your specified account as a Site Collection Admin to the site, get the Site Groups, the remove the account as Site Collection Admin.
 
-The script will also collect several Site and Group properties that can used to catalog and understand groupings of sites. For example,  “non-group Connected Sites, Group Connected sites, Sites with Teams, Teams private channels and etc.
-
-Default properties collected:
-
-Site Props:
-"URL"
-"Owner" 
-"IB Mode"
-"IB Segment"
-"Group ID" 
-"RelatedGroupId"
-"IsHubSite"
-"Template"
-"SiteDefinedSharingCapability"
-"SharingCapability"
-"IsTeamsConnected"
-"IsTeamsChannelConnected"
-"TeamsChannelType"
-  
-
-Group Props:
-"SPGroup Title"
-"SPGroup Roles"
-"SPGroup Users"
-"Entra Group Displayname"
-"Entra Group Alias"
-"Entra Group AccessType"
-"Entra Group ManagedBy"
-"Entra Group WhenCreated"
-"Entra Group Owners"
-"Entra Group Members"
-
-If you have Information Barriers in your Teant, you will see the Information Barriers Segments and Information Barriers mode at the site collection levels.
-
-
-![image](https://github.com/mikelee1313/Get-SPOSiteSharingLinks/assets/62190454/5fa98621-4594-4c7d-a39a-671ded1387af)
-
-
-More information regarding Organization Wide Sharing Links
-
 Here are 3 sharable link types:
 
 •	People in [your organization]:  Gives anyone in your organization who has the link access to the file, whether they receive it directly from you or forwarded from someone else.
