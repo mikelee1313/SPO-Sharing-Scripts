@@ -3,8 +3,6 @@
 Lots of customers are in the process of getting ready for Copilot and identifying internal oversharing is a requirement for Copilot readiness and deployment. The main purpose of this script is to read the Sharing Links groups at the site collection level, to help customers identify potential internal oversharing in their tenant.
 
 
-**Important:** The main loop is using Get-SPOSiteGroup to loop through all SharePoint Site groups and users. However, you need to be a Site Collection Admin to read this data, so please be aware that the script will add your specified account as a Site Collection Admin to the site, get the Site Groups, the remove the account as Site Collection Admin.
-
 Here are 3 sharable link types:
 
 •	People in [your organization]:  Gives anyone in your organization who has the link access to the file, whether they receive it directly from you or forwarded from someone else.
