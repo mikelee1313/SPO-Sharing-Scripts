@@ -41,12 +41,13 @@
 .NOTES
 
     Authors: Mike Lee
-    Date: 5/5/25
+    Date: 5/7/25
 
     Requirements:
         - PnP.PowerShell module installed
         - Appropriate permissions granted to the Azure AD application
         - Certificate-based authentication configured
+        - Script includes throttling handling for SharePoint Online
 
 Disclaimer: The sample scripts are provided AS IS without warranty of any kind. 
     Microsoft further disclaims all implied warranties including, without limitation, 
@@ -77,14 +78,15 @@ $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51" #This is your Tenant ID
 
 #Initialize Parameters - Do not change
 $sites = @()
-$output = @()
 $inputfile = $null
 $outputfile = $null
 $log = $null
 $date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+$maxRetries = 5  # Maximum number of retry attempts
+$initialRetryDelay = 5  # Initial retry delay in seconds
 
 #Input / Output and Log Files
-$inputfile = 'C:\temp\sitelist.csv'
+$inputfile = 'C:\temp\sitelist.csv' #This is the input file with list of sites to process. If not provided, all sites will be processed.
 $outputfile = "$env:TEMP\" + 'SPSites_and_Users_Info_' + $date + '_' + "output.csv"
 $log = "$env:TEMP\" + 'SPSites_and_Users_Info_' + $date + '_' + "logfile.log"
 
@@ -100,6 +102,77 @@ Function Write-LogEntry {
     }
 }
 
+# Function to handle throttling with exponential backoff
+Function Invoke-PnPWithRetry {
+    param (
+        [Parameter(Mandatory = $true)]
+        [scriptblock] $ScriptBlock,
+        
+        [Parameter(Mandatory = $false)]
+        [string] $Operation = "PnP Operation",
+        
+        [Parameter(Mandatory = $false)]
+        [int] $MaxRetries = 5,
+        
+        [Parameter(Mandatory = $false)]
+        [int] $InitialRetryDelay = 5,
+        
+        [Parameter(Mandatory = $false)]
+        [string] $LogName
+    )
+    
+    $retryCount = 0
+    $success = $false
+    $result = $null
+    $retryDelay = $InitialRetryDelay
+    
+    do {
+        try {
+            $result = & $ScriptBlock
+            $success = $true
+            return $result
+        }
+        catch {
+            $exceptionDetails = $_.Exception.ToString()
+            
+            # Check for throttling-related exceptions
+            if (($exceptionDetails -like "*429*") -or 
+                ($exceptionDetails -like "*throttl*") -or 
+                ($exceptionDetails -like "*too many requests*") -or
+                ($exceptionDetails -like "*request limit exceeded*")) {
+                
+                $retryCount++
+                
+                # Check if we've hit max retries
+                if ($retryCount -ge $MaxRetries) {
+                    Write-LogEntry -LogName $LogName -LogEntryText "Max retries ($MaxRetries) reached for $Operation. Giving up."
+                    throw $_
+                }
+                
+                # Parse Retry-After header if available
+                $retryAfterValue = $null
+                if ($_.Exception.Response -and $_.Exception.Response.Headers -and $_.Exception.Response.Headers["Retry-After"]) {
+                    $retryAfterValue = [int]$_.Exception.Response.Headers["Retry-After"]
+                    $retryDelay = $retryAfterValue
+                    Write-LogEntry -LogName $LogName -LogEntryText "Throttling detected for $Operation. Server requested retry after $retryAfterValue seconds."
+                }
+                else {
+                    # Use exponential backoff if no Retry-After header
+                    $retryDelay = [Math]::Min(30, $retryDelay * 2)
+                    Write-LogEntry -LogName $LogName -LogEntryText "Throttling detected for $Operation. Using exponential backoff: waiting $retryDelay seconds before retry $retryCount of $MaxRetries."
+                }
+                
+                Write-Host "Throttling detected for $Operation. Waiting $retryDelay seconds before retry $retryCount of $MaxRetries." -ForegroundColor Yellow
+                Start-Sleep -Seconds $retryDelay
+            }
+            else {
+                # Not a throttling error, just throw it
+                throw $_
+            }
+        }
+    } while (-not $success -and $retryCount -lt $MaxRetries)
+}
+
 # Define the connection parameters for reuse
 $connectionParams = @{
     ClientId      = $appID
@@ -111,7 +184,12 @@ $connectionParams = @{
 #Connect to Admin Center initially
 try {
     $adminUrl = 'https://' + $tenantname + '-admin.sharepoint.com'
-    Connect-PnPOnline -Url $adminUrl @connectionParams
+    
+    # Use the retry function for the connection
+    Invoke-PnPWithRetry -ScriptBlock { 
+        Connect-PnPOnline -Url $adminUrl @connectionParams 
+    } -Operation "Connect to SharePoint Admin Center" -LogName $Log
+    
     Write-LogEntry -LogName $Log -LogEntryText "Successfully connected to SharePoint Admin Center: $adminUrl"
 }
 catch {
@@ -138,8 +216,15 @@ else {
     Write-LogEntry -LogName $Log -LogEntryText "Getting sites using Get-PnPTenantSite (no input file specified or found)"
     try {
         # Ensure we are connected to Admin Center before this call
-        Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop
-        $sites = Get-PnPTenantSite # Excludes OneDrive by default
+        Invoke-PnPWithRetry -ScriptBlock { 
+            Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop 
+        } -Operation "Connect to SharePoint Admin Center (before Get-PnPTenantSite)" -LogName $Log
+        
+        # Use retry function for getting tenant sites which is prone to throttling
+        $sites = Invoke-PnPWithRetry -ScriptBlock { 
+            Get-PnPTenantSite # Excludes OneDrive by default 
+        } -Operation "Get-PnPTenantSite" -LogName $Log
+        
         Write-Host "Found $($sites.Count) sites." -ForegroundColor Green
         Write-LogEntry -LogName $Log -LogEntryText "Retrieved $($sites.Count) sites using Get-PnPTenantSite."
     }
@@ -317,244 +402,32 @@ Function Update-SiteCollectionData {
 $totalSites = $sites.Count
 $processedCount = 0
 
-foreach ($site in $sites) {
-    $processedCount++
-    $siteUrl = $site.Url
-    Write-Host "Processing site $processedCount/$totalSites : $siteUrl" -ForegroundColor Cyan
-    Write-LogEntry -LogName $Log -LogEntryText "Processing site $processedCount/$totalSites : $siteUrl"
+# Create CSV with headers first
+$csvHeaders = "URL,Owner,IB Mode,IB Segment,Group ID,RelatedGroupId,IsHubSite,Template,SiteDefinedSharingCapability," + 
+"SharingCapability,DisableCompanyWideSharingLinks,Custom Script Allowed,IsTeamsConnected,IsTeamsChannelConnected," + 
+"TeamsChannelType,StorageQuota (MB),StorageUsageCurrent (MB),LockState,LastContentModifiedDate,ArchiveState," + 
+"DefaultTrimMode,DefaultExpireAfterDays,MajorVersionLimit,Entra Group Displayname,Entra Group Alias," + 
+"Entra Group AccessType,Entra Group WhenCreated,Site Collection Admins (Name <Email>),Has Sharing Links," + 
+"Shared With Everyone,SP Groups On Site,SP Groups Roles,SP Users (Group: Name <Email>),Entra Group Owners (Name <Email>)," + 
+"Entra Group Members (Name <Email>)"
 
-    $siteprops = $null
-    $AADGroups = $null # M365 Group details
-    $groupmembersRaw = $null # M365 Group Members
-    $groupownersRaw = $null # M365 Group Owners
-    $currentPnPConnection = $null # To hold the site-specific connection if successful
+# Create the CSV file with headers
+Set-Content -Path $outputfile -Value $csvHeaders -Encoding UTF8
+Write-Host "Created output file with headers: $outputfile" -ForegroundColor Green
+Write-LogEntry -LogName $Log -LogEntryText "Created output file with headers: $outputfile"
 
-    try {
-        # Get Site Properties using the Admin connection context
-        Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop # Ensure admin context
-        $siteprops = Get-PnPTenantSite -Identity $siteUrl | Select-Object Url, Owner, InformationBarrierMode, InformationBarrierSegments, GroupId, RelatedGroupId, IsHubSite, Template, SiteDefinedSharingCapability, SharingCapability, DisableCompanyWideSharingLinks, DenyAddAndCustomizePages, IsTeamsConnected, IsTeamsChannelConnected, TeamsChannelType, StorageQuota, StorageUsageCurrent, LockState, LastContentModifiedDate, ArchiveState
-
-        if ($null -eq $siteprops) { Write-LogEntry -LogName $Log -LogEntryText "Failed to retrieve properties for site $siteUrl. Skipping."; continue }
-
-        # Initialize site data with basic properties
-        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops
-
-        # --- Connect to the specific site ---
-        try {
-            Write-LogEntry -LogName $Log -LogEntryText "Connecting to specific site: $siteUrl"
-            $currentPnPConnection = Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
-            Write-LogEntry -LogName $Log -LogEntryText "Successfully connected to specific site: $siteUrl"
-        }
-        catch { Write-LogEntry -LogName $Log -LogEntryText "ERROR: Could not connect to site $siteUrl. Skipping SP Group/User processing. $_"; continue }
-
-        # --- Version Policy Processing ---
-        try {
-            Write-LogEntry -LogName $Log -LogEntryText "Retrieving version policy for site $siteUrl"
-            $versionPolicy = Get-PnPSiteVersionPolicy
-            
-            if ($versionPolicy) {
-                Write-LogEntry -LogName $Log -LogEntryText "Successfully retrieved version policy for site $siteUrl"
-                
-                # Debug output to verify the actual values
-                Write-LogEntry -LogName $Log -LogEntryText "Version policy values - DefaultTrimMode: $($versionPolicy.DefaultTrimMode), DefaultExpireAfterDays: $($versionPolicy.DefaultExpireAfterDays), MajorVersionLimit: $($versionPolicy.MajorVersionLimit)"
-                
-                # Update site data with version policy details - Pass values explicitly to avoid type conversion issues
-                $expireDays = if ($null -eq $versionPolicy.DefaultExpireAfterDays) { -1 } else { [int]$versionPolicy.DefaultExpireAfterDays }
-                $versionLimit = if ($null -eq $versionPolicy.MajorVersionLimit) { -1 } else { [int]$versionPolicy.MajorVersionLimit }
-                
-                Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops `
-                    -DefaultTrimMode $versionPolicy.DefaultTrimMode `
-                    -DefaultExpireAfterDays $expireDays `
-                    -MajorVersionLimit $versionLimit
-            }
-            else {
-                Write-LogEntry -LogName $Log -LogEntryText "Warning: No version policy found for site $siteUrl"
-            }
-        }
-        catch {
-            Write-LogEntry -LogName $Log -LogEntryText "Error retrieving version policy for site $siteUrl : $_"
-        }
-
-        # --- Site Collection Administrators Processing ---
-        try {
-            Write-LogEntry -LogName $Log -LogEntryText "Retrieving site collection administrators for site $siteUrl"
-            $siteAdmins = Get-PnPSiteCollectionAdmin
-
-            if ($siteAdmins -and $siteAdmins.Count -gt 0) {
-                Write-LogEntry -LogName $Log -LogEntryText "Found $($siteAdmins.Count) site collection administrators on $siteUrl"
-                
-                foreach ($admin in $siteAdmins) {
-                    if (!$admin -or !$admin.LoginName) { 
-                        Write-LogEntry -LogName $Log -LogEntryText "Skipping null site admin $siteUrl"
-                        continue 
-                    }
-                    
-                    $adminName = $admin.Title
-                    $adminEmail = $admin.Email
-                    
-                    # Get additional info from Azure AD if it's a user account
-                    if ($admin.LoginName -like '*@*' -and $admin.PrincipalType -eq 'User') {
-                        try {
-                            $aadUser = Get-PnPAzureADUser -Identity $admin.LoginName -ErrorAction SilentlyContinue
-                            if ($aadUser) { 
-                                $adminName = $aadUser.DisplayName
-                                $adminEmail = $aadUser.Mail
-                            }
-                        }
-                        catch { 
-                            Write-LogEntry -LogName $Log -LogEntryText "Warn: Getting AAD User info for admin '$($admin.LoginName)' failed: $_" 
-                        }
-                    }
-                    
-                    # Add the admin to the site collection data
-                    Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -SiteAdminName $adminName -SiteAdminEmail $adminEmail
-                }
-            }
-            else {
-                Write-LogEntry -LogName $Log -LogEntryText "No site collection administrators found for $siteUrl or unable to retrieve them"
-            }
-        }
-        catch {
-            Write-LogEntry -LogName $Log -LogEntryText "Error retrieving site collection administrators for site $siteUrl : $_"
-        }
-
-        # --- Microsoft 365 Group Processing (if applicable) ---
-        if ($null -ne $siteprops.GroupId -and $siteprops.GroupId -ne [System.Guid]::Empty) {
-            Write-LogEntry -LogName $Log -LogEntryText "Site $siteUrl connected M365 Group: $($siteprops.GroupId)."
-            try {
-                # Get M365 Group Details
-                $AADGroups = Get-PnPMicrosoft365Group -Identity $siteprops.GroupId
-                if ($AADGroups) {
-                    Write-LogEntry -LogName $Log -LogEntryText "Successfully retrieved AAD Group details for $($siteprops.GroupId)."
-                    # Update site data with AAD Group details
-                    Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -AADGroups $AADGroups
-                }
-                else {
-                    Write-LogEntry -LogName $Log -LogEntryText "Warning: Get-PnPMicrosoft365Group returned null for Group ID $($siteprops.GroupId) on site $siteUrl."
-                }
-
-                # Get M365 Group Owners and Members
-                $groupownersRaw = Get-PnPMicrosoft365GroupOwners -Identity $siteprops.GroupId
-                $groupmembersRaw = Get-PnPMicrosoft365GroupMembers -Identity $siteprops.GroupId
-                Write-LogEntry -LogName $Log -LogEntryText "Retrieved $($groupownersRaw.Count) owners / $($groupmembersRaw.Count) members for M365 Group $($siteprops.GroupId)"
-
-                # Process Owners & Members
-                foreach ($owner in $groupownersRaw) {
-                    try {
-                        $aadOwnerUser = Get-PnPAzureADUser -Identity $owner.Id
-                        if ($aadOwnerUser) { Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -EntraGroupOwner $aadOwnerUser.DisplayName -EntraGroupOwnerEmail $aadOwnerUser.Mail }
-                        else { Write-LogEntry -LogName $Log -LogEntryText "Could not find AAD details M365 Owner ID: $($owner.Id)" }
-                    }
-                    catch { Write-LogEntry -LogName $Log -LogEntryText "Error getting AAD details M365 Owner ID $($owner.Id): $_" }
-                }
-                foreach ($member in $groupmembersRaw) {
-                    try {
-                        $aadMemberUser = Get-PnPAzureADUser -Identity $member.Id
-                        if ($aadMemberUser) { Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -EntraGroupMember $aadMemberUser.DisplayName -EntraGroupMemberEmail $aadMemberUser.Mail }
-                        else { Write-LogEntry -LogName $Log -LogEntryText "Could not find AAD details M365 Member ID: $($member.Id)" }
-                    }
-                    catch { Write-LogEntry -LogName $Log -LogEntryText "Error getting AAD details M365 Member ID $($member.Id): $_" }
-                }
-            }
-            catch { Write-LogEntry -LogName $Log -LogEntryText "Warning: Could not retrieve M365 group info for $($siteprops.GroupId) site $siteUrl : $_" }
-        }
-        else { Write-LogEntry -LogName $Log -LogEntryText "Site $siteUrl not connected to M365 Group." }
-
-        # --- SharePoint Group Processing ---
-        $spGroups = @()
-        try {
-            $spGroups = Get-PnPGroup
-            Write-LogEntry -LogName $Log -LogEntryText "Found $($spGroups.Count) SP Groups on $siteUrl"
-        }
-        catch { Write-LogEntry -LogName $Log -LogEntryText "Error retrieving SP groups for site $siteUrl : $_" }
-
-        ForEach ($spGroup in $spGroups) {
-            if (!$spGroup -or !$spGroup.Title) { Write-LogEntry -LogName $Log -LogEntryText "Skipping null SP group/title $siteUrl"; continue }
-
-            $spGroupName = $spGroup.Title; $spGroupRolesString = ""
-            Write-LogEntry -LogName $Log -LogEntryText "Processing SP Group: '$spGroupName' $siteUrl"
-            
-            # Check if this is a sharing links group
-            if ($spGroupName -like "SharingLinks*") {
-                Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -SPGroupName $spGroupName
-            }
-
-            # Get SP Group Roles
-            try {
-                $web = Get-PnPWeb -Includes RoleAssignments
-                $groupRoleAssignments = $web.RoleAssignments
-                if ($groupRoleAssignments) {
-                    $rolesList = [System.Collections.Generic.List[string]]::new()
-                    foreach ($roleAssignment in $groupRoleAssignments) {
-                        $roleAssignmentWithDefs = Get-PnPProperty -ClientObject $roleAssignment -Property RoleDefinitionBindings
-                        foreach ($roleDef in $roleAssignmentWithDefs) { if ($roleDef -and $roleDef.Name -and -not $rolesList.Contains($roleDef.Name)) { $rolesList.Add($roleDef.Name) } }
-                    }
-                    $spGroupRolesString = $rolesList -join ','
-                }
-                else { Write-LogEntry -LogName $Log -LogEntryText "No role assignments SP group '$spGroupName' $siteUrl" }
-            }
-            catch { Write-LogEntry -LogName $Log -LogEntryText "Error retrieving roles SP group '$spGroupName' $siteUrl : $_" }
-
-            # Update site data with the Group Name and its Roles
-            Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -SPGroupName $spGroupName -SPGroupRoles $spGroupRolesString
-
-            # Get SP Group Members
-            $spGroupMembers = @()
-            try {
-                if ($spGroup.Id) { $spGroupMembers = Get-PnPGroupMember -Identity $spGroup.Id }
-                else { Write-LogEntry -LogName $Log -LogEntryText "SP Group '$spGroupName' null ID." }
-
-                foreach ($member in $spGroupMembers) {
-                    if (!$member -or !$member.LoginName) { Write-LogEntry -LogName $Log -LogEntryText "Skipping null/empty member SP group '$spGroupName'."; continue }
-
-                    $spUserLogin = $member.LoginName; $spUserTitle = $member.Title
-                    $spUserName = ""; $spUserEmail = ""
-                    
-                    # Check for spo-grid-all-users in the login name
-                    if ($spUserLogin -like "*spo-grid-all-users*") {
-                        Write-LogEntry -LogName $Log -LogEntryText "Found 'Everyone' user (spo-grid-all-users) in group '$spGroupName' on $siteUrl"
-                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -SPUserLoginName $spUserLogin
-                    }
-
-                    try {
-                        $pnpUser = Get-PnPUser -Identity $spUserLogin -ErrorAction SilentlyContinue
-                        if ($pnpUser) {
-                            $spUserName = $pnpUser.Title; $spUserEmail = $pnpUser.Email
-                            if ($pnpUser.LoginName -like '*@*' -and $pnpUser.PrincipalType -eq 'User') {
-                                try {
-                                    $aadUser = Get-PnPAzureADUser -Identity $pnpUser.Email
-                                    if ($aadUser) { $spUserName = $aadUser.DisplayName; $spUserEmail = $aadUser.Mail }
-                                    else { Write-LogEntry -LogName $Log -LogEntryText "AAD User not found '$($pnpUser.LoginName)'." }
-                                }
-                                catch { Write-LogEntry -LogName $Log -LogEntryText "Warn: Getting AAD User '$($pnpUser.LoginName)' failed: $_" }
-                            }
-                            elseif ($pnpUser.PrincipalType -ne 'User') { Write-LogEntry -LogName $Log -LogEntryText "Login '$spUserLogin' is $($pnpUser.PrincipalType)."; $spUserName = if ($pnpUser.Title) { $pnpUser.Title } else { $spUserLogin } }
-                        }
-                        else { Write-LogEntry -LogName $Log -LogEntryText "Warn: Get-PnPUser failed '$spUserLogin'."; $spUserName = $spUserTitle }
-
-                        # Call Update-SiteCollectionData for the specific user/group combo
-                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -AssociatedSPGroup $spGroupName -SPUserName $spUserName -SPUserTitle $spUserTitle -SPUserEmail $spUserEmail -SPUserLoginName $spUserLogin
-
-                    }
-                    catch { Write-LogEntry -LogName $Log -LogEntryText "Error processing member '$($member.LoginName)' SP group '$spGroupName' $siteUrl : $_"; Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -AssociatedSPGroup $spGroupName -SPUserName $member.Title -SPUserTitle $member.Title } # Fallback
-                } # End foreach SP Group Member
-            }
-            catch { Write-LogEntry -LogName $Log -LogEntryText "Error retrieving members SP group '$spGroupName' $siteUrl : $_" }
-        } # End foreach SP Group
-
+# Function to export a single site collection record to CSV
+function Export-SiteCollectionToCSV {
+    param(
+        [string] $SiteUrl,
+        [string] $CsvPath
+    )
+    
+    $siteData = $siteCollectionData[$SiteUrl]
+    if (-not $siteData) {
+        Write-LogEntry -LogName $Log -LogEntryText "Error: No data found for site $SiteUrl when attempting to export"
+        return
     }
-    catch {
-        Write-LogEntry -LogName $Log -LogEntryText "FATAL Error main processing block $siteUrl : $_"
-        continue # Continue to the next site
-    }
-} # End foreach Site
-
-# --- Final Output Generation ---
-Write-Host "Consolidating results..." -ForegroundColor Green
-$finalOutput = [System.Collections.Generic.List[PSObject]]::new()
-
-foreach ($siteUrl in $siteCollectionData.Keys) {
-    $siteData = $siteCollectionData[$siteUrl]
 
     # --- Format the combined strings ---
     # SP Users: "GroupName:Name <Email>"
@@ -620,29 +493,346 @@ foreach ($siteUrl in $siteCollectionData.Keys) {
         "Entra Group Owners (Name <Email>)"     = $entraOwnersFormatted   # Combined Owner Info
         "Entra Group Members (Name <Email>)"    = $entraMembersFormatted  # Combined Member Info
     }
-    $finalOutput.Add($exportItem)
-}
 
-#Output to CSV
-if ($finalOutput.Count -gt 0) {
-    Write-Host "Exporting $($finalOutput.Count) site records to CSV..." -ForegroundColor Green
+    # Export this item as a single line to CSV (append mode)
     try {
-        # Select the desired properties in the desired order for the CSV
-        $finalOutput | Select-Object URL, Owner, "IB Mode", "IB Segment", "Group ID", RelatedGroupId, IsHubSite, Template, SiteDefinedSharingCapability, SharingCapability, DisableCompanyWideSharingLinks, "Custom Script Allowed", IsTeamsConnected, IsTeamsChannelConnected, TeamsChannelType, "StorageQuota (MB)", "StorageUsageCurrent (MB)", LockState, LastContentModifiedDate, ArchiveState, DefaultTrimMode, DefaultExpireAfterDays, MajorVersionLimit, "Entra Group Displayname", "Entra Group Alias", "Entra Group AccessType", "Entra Group WhenCreated", "Site Collection Admins (Name <Email>)", "Has Sharing Links", "Shared With Everyone", "SP Groups On Site", "SP Groups Roles", "SP Users (Group: Name <Email>)", "Entra Group Owners (Name <Email>)", "Entra Group Members (Name <Email>)" | Export-Csv -Path $outputfile -NoTypeInformation -Encoding UTF8
-        Write-Host "Output successfully written to: $outputfile" -ForegroundColor Green
-        Write-LogEntry -LogName $Log -LogEntryText "Output successfully written to: $outputfile"
+        $exportItem | Export-Csv -Path $CsvPath -NoTypeInformation -Append -Encoding UTF8
+        Write-LogEntry -LogName $Log -LogEntryText "Successfully wrote data for site $SiteUrl to CSV"
+        
+        # Remove the site data from the hashtable to free memory
+        $siteCollectionData.Remove($SiteUrl)
     }
     catch {
-        Write-Host "Error writing output CSV to '$outputfile': $_" -ForegroundColor Red
-        Write-LogEntry -LogName $Log -LogEntryText "Error writing output CSV to '$outputfile': $_"
+        Write-Host "Error writing site data ($SiteUrl) to CSV '$CsvPath': $_" -ForegroundColor Red
+        Write-LogEntry -LogName $Log -LogEntryText "Error writing site data ($SiteUrl) to CSV '$CsvPath': $_"
     }
 }
-else {
-    Write-Host "No site information found or processed to export." -ForegroundColor Yellow
-    Write-LogEntry -LogName $Log -LogEntryText "No site information found or processed to export."
-}
+
+foreach ($site in $sites) {
+    $processedCount++
+    $siteUrl = $site.Url
+    Write-Host "Processing site $processedCount/$totalSites : $siteUrl" -ForegroundColor Cyan
+    Write-LogEntry -LogName $Log -LogEntryText "Processing site $processedCount/$totalSites : $siteUrl"
+
+    $siteprops = $null
+    $AADGroups = $null # M365 Group details
+    $groupmembersRaw = $null # M365 Group Members
+    $groupownersRaw = $null # M365 Group Owners
+    $currentPnPConnection = $null # To hold the site-specific connection if successful
+
+    try {
+        # Get Site Properties using the Admin connection context
+        Invoke-PnPWithRetry -ScriptBlock { 
+            Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop 
+        } -Operation "Connect to Admin URL for site $siteUrl" -LogName $Log
+        
+        $siteprops = Invoke-PnPWithRetry -ScriptBlock { 
+            Get-PnPTenantSite -Identity $siteUrl | Select-Object Url, Owner, InformationBarrierMode, InformationBarrierSegments, GroupId, RelatedGroupId, IsHubSite, Template, SiteDefinedSharingCapability, SharingCapability, DisableCompanyWideSharingLinks, DenyAddAndCustomizePages, IsTeamsConnected, IsTeamsChannelConnected, TeamsChannelType, StorageQuota, StorageUsageCurrent, LockState, LastContentModifiedDate, ArchiveState
+        } -Operation "Get-PnPTenantSite for $siteUrl" -LogName $Log
+
+        if ($null -eq $siteprops) { Write-LogEntry -LogName $Log -LogEntryText "Failed to retrieve properties for site $siteUrl. Skipping."; continue }
+
+        # Initialize site data with basic properties
+        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops
+
+        # --- Connect to the specific site ---
+        try {
+            Write-LogEntry -LogName $Log -LogEntryText "Connecting to specific site: $siteUrl"
+            
+            $currentPnPConnection = Invoke-PnPWithRetry -ScriptBlock { 
+                Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop 
+            } -Operation "Connect to site $siteUrl" -LogName $Log
+            
+            Write-LogEntry -LogName $Log -LogEntryText "Successfully connected to specific site: $siteUrl"
+        }
+        catch { Write-LogEntry -LogName $Log -LogEntryText "ERROR: Could not connect to site $siteUrl. Skipping SP Group/User processing. $_"; continue }
+
+        # --- Version Policy Processing ---
+        try {
+            Write-LogEntry -LogName $Log -LogEntryText "Retrieving version policy for site $siteUrl"
+            
+            $versionPolicy = Invoke-PnPWithRetry -ScriptBlock { 
+                Get-PnPSiteVersionPolicy 
+            } -Operation "Get-PnPSiteVersionPolicy for $siteUrl" -LogName $Log
+            
+            if ($versionPolicy) {
+                Write-LogEntry -LogName $Log -LogEntryText "Successfully retrieved version policy for site $siteUrl"
+                
+                # Debug output to verify the actual values
+                Write-LogEntry -LogName $Log -LogEntryText "Version policy values - DefaultTrimMode: $($versionPolicy.DefaultTrimMode), DefaultExpireAfterDays: $($versionPolicy.DefaultExpireAfterDays), MajorVersionLimit: $($versionPolicy.MajorVersionLimit)"
+                
+                # Update site data with version policy details - Pass values explicitly to avoid type conversion issues
+                $expireDays = if ($null -eq $versionPolicy.DefaultExpireAfterDays) { -1 } else { [int]$versionPolicy.DefaultExpireAfterDays }
+                $versionLimit = if ($null -eq $versionPolicy.MajorVersionLimit) { -1 } else { [int]$versionPolicy.MajorVersionLimit }
+                
+                Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops `
+                    -DefaultTrimMode $versionPolicy.DefaultTrimMode `
+                    -DefaultExpireAfterDays $expireDays `
+                    -MajorVersionLimit $versionLimit
+            }
+            else {
+                Write-LogEntry -LogName $Log -LogEntryText "Warning: No version policy found for site $siteUrl"
+            }
+        }
+        catch {
+            Write-LogEntry -LogName $Log -LogEntryText "Error retrieving version policy for site $siteUrl : $_"
+        }
+
+        # --- Site Collection Administrators Processing ---
+        try {
+            Write-LogEntry -LogName $Log -LogEntryText "Retrieving site collection administrators for site $siteUrl"
+            
+            $siteAdmins = Invoke-PnPWithRetry -ScriptBlock { 
+                Get-PnPSiteCollectionAdmin 
+            } -Operation "Get-PnPSiteCollectionAdmin for $siteUrl" -LogName $Log
+
+            if ($siteAdmins -and $siteAdmins.Count -gt 0) {
+                Write-LogEntry -LogName $Log -LogEntryText "Found $($siteAdmins.Count) site collection administrators on $siteUrl"
+                
+                foreach ($admin in $siteAdmins) {
+                    if (!$admin -or !$admin.LoginName) { 
+                        Write-LogEntry -LogName $Log -LogEntryText "Skipping null site admin $siteUrl"
+                        continue 
+                    }
+                    
+                    $adminName = $admin.Title
+                    $adminEmail = $admin.Email
+                    
+                    # Get additional info from Azure AD if it's a user account
+                    if ($admin.LoginName -like '*@*' -and $admin.PrincipalType -eq 'User') {
+                        try {
+                            $aadUser = Invoke-PnPWithRetry -ScriptBlock { 
+                                Get-PnPAzureADUser -Identity $admin.LoginName -ErrorAction SilentlyContinue 
+                            } -Operation "Get-PnPAzureADUser for admin $($admin.LoginName)" -LogName $Log
+                            
+                            if ($aadUser) { 
+                                $adminName = $aadUser.DisplayName
+                                $adminEmail = $aadUser.Mail
+                            }
+                        }
+                        catch { 
+                            Write-LogEntry -LogName $Log -LogEntryText "Warn: Getting AAD User info for admin '$($admin.LoginName)' failed: $_" 
+                        }
+                    }
+                    
+                    # Add the admin to the site collection data
+                    Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -SiteAdminName $adminName -SiteAdminEmail $adminEmail
+                }
+            }
+            else {
+                Write-LogEntry -LogName $Log -LogEntryText "No site collection administrators found for $siteUrl or unable to retrieve them"
+            }
+        }
+        catch {
+            Write-LogEntry -LogName $Log -LogEntryText "Error retrieving site collection administrators for site $siteUrl : $_"
+        }
+
+        # --- Microsoft 365 Group Processing (if applicable) ---
+        if ($null -ne $siteprops.GroupId -and $siteprops.GroupId -ne [System.Guid]::Empty) {
+            Write-LogEntry -LogName $Log -LogEntryText "Site $siteUrl connected M365 Group: $($siteprops.GroupId)."
+            try {
+                # Get M365 Group Details
+                $AADGroups = Invoke-PnPWithRetry -ScriptBlock { 
+                    Get-PnPMicrosoft365Group -Identity $siteprops.GroupId 
+                } -Operation "Get-PnPMicrosoft365Group for $($siteprops.GroupId)" -LogName $Log
+                
+                if ($AADGroups) {
+                    Write-LogEntry -LogName $Log -LogEntryText "Successfully retrieved AAD Group details for $($siteprops.GroupId)."
+                    # Update site data with AAD Group details
+                    Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -AADGroups $AADGroups
+                }
+                else {
+                    Write-LogEntry -LogName $Log -LogEntryText "Warning: Get-PnPMicrosoft365Group returned null for Group ID $($siteprops.GroupId) on site $siteUrl."
+                }
+
+                # Get M365 Group Owners and Members
+                $groupownersRaw = Invoke-PnPWithRetry -ScriptBlock { 
+                    Get-PnPMicrosoft365GroupOwners -Identity $siteprops.GroupId 
+                } -Operation "Get-PnPMicrosoft365GroupOwners for $($siteprops.GroupId)" -LogName $Log
+                
+                $groupmembersRaw = Invoke-PnPWithRetry -ScriptBlock { 
+                    Get-PnPMicrosoft365GroupMembers -Identity $siteprops.GroupId 
+                } -Operation "Get-PnPMicrosoft365GroupMembers for $($siteprops.GroupId)" -LogName $Log
+                
+                Write-LogEntry -LogName $Log -LogEntryText "Retrieved $($groupownersRaw.Count) owners / $($groupmembersRaw.Count) members for M365 Group $($siteprops.GroupId)"
+
+                # Process Owners & Members
+                foreach ($owner in $groupownersRaw) {
+                    try {
+                        $aadOwnerUser = Invoke-PnPWithRetry -ScriptBlock { 
+                            Get-PnPAzureADUser -Identity $owner.Id 
+                        } -Operation "Get-PnPAzureADUser for owner $($owner.Id)" -LogName $Log
+                        
+                        if ($aadOwnerUser) { Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -EntraGroupOwner $aadOwnerUser.DisplayName -EntraGroupOwnerEmail $aadOwnerUser.Mail }
+                        else { Write-LogEntry -LogName $Log -LogEntryText "Could not find AAD details M365 Owner ID: $($owner.Id)" }
+                    }
+                    catch { Write-LogEntry -LogName $Log -LogEntryText "Error getting AAD details M365 Owner ID $($owner.Id): $_" }
+                }
+                foreach ($member in $groupmembersRaw) {
+                    try {
+                        $aadMemberUser = Invoke-PnPWithRetry -ScriptBlock { 
+                            Get-PnPAzureADUser -Identity $member.Id 
+                        } -Operation "Get-PnPAzureADUser for member $($member.Id)" -LogName $Log
+                        
+                        if ($aadMemberUser) { Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -EntraGroupMember $aadMemberUser.DisplayName -EntraGroupMemberEmail $aadMemberUser.Mail }
+                        else { Write-LogEntry -LogName $Log -LogEntryText "Could not find AAD details M365 Member ID: $($member.Id)" }
+                    }
+                    catch { Write-LogEntry -LogName $Log -LogEntryText "Error getting AAD details M365 Member ID $($member.Id): $_" }
+                }
+            }
+            catch { Write-LogEntry -LogName $Log -LogEntryText "Warning: Could not retrieve M365 group info for $($siteprops.GroupId) site $siteUrl : $_" }
+        }
+        else { Write-LogEntry -LogName $Log -LogEntryText "Site $siteUrl not connected to M365 Group." }
+
+        # --- SharePoint Group Processing ---
+        $spGroups = @()
+        try {
+            $spGroups = Invoke-PnPWithRetry -ScriptBlock { 
+                Get-PnPGroup 
+            } -Operation "Get-PnPGroup for $siteUrl" -LogName $Log
+            
+            Write-LogEntry -LogName $Log -LogEntryText "Found $($spGroups.Count) SP Groups on $siteUrl"
+        }
+        catch { Write-LogEntry -LogName $Log -LogEntryText "Error retrieving SP groups for site $siteUrl : $_" }
+
+        ForEach ($spGroup in $spGroups) {
+            if (!$spGroup -or !$spGroup.Title) { Write-LogEntry -LogName $Log -LogEntryText "Skipping null SP group/title $siteUrl"; continue }
+
+            $spGroupName = $spGroup.Title; $spGroupRolesString = ""
+            Write-LogEntry -LogName $Log -LogEntryText "Processing SP Group: '$spGroupName' $siteUrl"
+            
+            # Check if this is a sharing links group
+            if ($spGroupName -like "SharingLinks*") {
+                Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -SPGroupName $spGroupName
+            }
+
+            # Get SP Group Roles with throttling handling
+            try {
+                $web = Invoke-PnPWithRetry -ScriptBlock { 
+                    Get-PnPWeb -Includes RoleAssignments 
+                } -Operation "Get-PnPWeb with RoleAssignments for $siteUrl" -LogName $Log
+                
+                $groupRoleAssignments = $web.RoleAssignments
+                if ($groupRoleAssignments) {
+                    $rolesList = [System.Collections.Generic.List[string]]::new()
+                    foreach ($roleAssignment in $groupRoleAssignments) {
+                        $roleAssignmentWithDefs = Invoke-PnPWithRetry -ScriptBlock { 
+                            Get-PnPProperty -ClientObject $roleAssignment -Property RoleDefinitionBindings 
+                        } -Operation "Get-PnPProperty RoleDefinitionBindings for group $spGroupName" -LogName $Log
+                        
+                        foreach ($roleDef in $roleAssignmentWithDefs) { 
+                            if ($roleDef -and $roleDef.Name -and -not $rolesList.Contains($roleDef.Name)) { 
+                                $rolesList.Add($roleDef.Name) 
+                            } 
+                        }
+                    }
+                    $spGroupRolesString = $rolesList -join ','
+                }
+                else { 
+                    Write-LogEntry -LogName $Log -LogEntryText "No role assignments SP group '$spGroupName' $siteUrl" 
+                }
+            }
+            catch { 
+                Write-LogEntry -LogName $Log -LogEntryText "Error retrieving roles SP group '$spGroupName' $siteUrl : $_" 
+            }
+
+            # Update site data with the Group Name and its Roles
+            Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -SPGroupName $spGroupName -SPGroupRoles $spGroupRolesString
+
+            # Get SP Group Members with throttling handling
+            $spGroupMembers = @()
+            try {
+                if ($spGroup.Id) { 
+                    $spGroupMembers = Invoke-PnPWithRetry -ScriptBlock { 
+                        Get-PnPGroupMember -Identity $spGroup.Id 
+                    } -Operation "Get-PnPGroupMember for group $spGroupName" -LogName $Log
+                }
+                else { 
+                    Write-LogEntry -LogName $Log -LogEntryText "SP Group '$spGroupName' null ID." 
+                }
+
+                foreach ($member in $spGroupMembers) {
+                    if (!$member -or !$member.LoginName) { 
+                        Write-LogEntry -LogName $Log -LogEntryText "Skipping null/empty member SP group '$spGroupName'."
+                        continue 
+                    }
+
+                    $spUserLogin = $member.LoginName
+                    $spUserTitle = $member.Title
+                    $spUserName = ""
+                    $spUserEmail = ""
+                    
+                    # Check for spo-grid-all-users in the login name
+                    if ($spUserLogin -like "*spo-grid-all-users*") {
+                        Write-LogEntry -LogName $Log -LogEntryText "Found 'Everyone' user (spo-grid-all-users) in group '$spGroupName' on $siteUrl"
+                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -SPUserLoginName $spUserLogin
+                    }
+
+                    try {
+                        $pnpUser = Invoke-PnPWithRetry -ScriptBlock { 
+                            Get-PnPUser -Identity $spUserLogin -ErrorAction SilentlyContinue 
+                        } -Operation "Get-PnPUser for $spUserLogin" -LogName $Log
+                        
+                        if ($pnpUser) {
+                            $spUserName = $pnpUser.Title
+                            $spUserEmail = $pnpUser.Email
+                            
+                            if ($pnpUser.LoginName -like '*@*' -and $pnpUser.PrincipalType -eq 'User') {
+                                try {
+                                    $aadUser = Invoke-PnPWithRetry -ScriptBlock { 
+                                        Get-PnPAzureADUser -Identity $pnpUser.Email 
+                                    } -Operation "Get-PnPAzureADUser for $($pnpUser.Email)" -LogName $Log
+                                    
+                                    if ($aadUser) { 
+                                        $spUserName = $aadUser.DisplayName
+                                        $spUserEmail = $aadUser.Mail
+                                    }
+                                    else { 
+                                        Write-LogEntry -LogName $Log -LogEntryText "AAD User not found '$($pnpUser.LoginName)'." 
+                                    }
+                                }
+                                catch { 
+                                    Write-LogEntry -LogName $Log -LogEntryText "Warn: Getting AAD User '$($pnpUser.LoginName)' failed: $_" 
+                                }
+                            }
+                            elseif ($pnpUser.PrincipalType -ne 'User') { 
+                                Write-LogEntry -LogName $Log -LogEntryText "Login '$spUserLogin' is $($pnpUser.PrincipalType)."
+                                $spUserName = if ($pnpUser.Title) { $pnpUser.Title } else { $spUserLogin } 
+                            }
+                        }
+                        else { 
+                            Write-LogEntry -LogName $Log -LogEntryText "Warn: Get-PnPUser failed '$spUserLogin'."
+                            $spUserName = $spUserTitle 
+                        }
+
+                        # Call Update-SiteCollectionData for the specific user/group combo
+                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -AssociatedSPGroup $spGroupName -SPUserName $spUserName -SPUserTitle $spUserTitle -SPUserEmail $spUserEmail -SPUserLoginName $spUserLogin
+                    }
+                    catch { 
+                        Write-LogEntry -LogName $Log -LogEntryText "Error processing member '$($member.LoginName)' SP group '$spGroupName' $siteUrl : $_"
+                        # Fallback
+                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -AssociatedSPGroup $spGroupName -SPUserName $member.Title -SPUserTitle $member.Title 
+                    }
+                } # End foreach SP Group Member
+            }
+            catch { 
+                Write-LogEntry -LogName $Log -LogEntryText "Error retrieving members SP group '$spGroupName' $siteUrl : $_" 
+            }
+        } # End foreach SP Group
+    }
+    catch {
+        Write-LogEntry -LogName $Log -LogEntryText "FATAL Error main processing block $siteUrl : $_"
+        continue # Continue to the next site
+    }
+    
+    # Export this site's data to CSV immediately after processing
+    Export-SiteCollectionToCSV -SiteUrl $siteUrl -CsvPath $outputfile
+    Write-Host "Exported data for site $processedCount/$totalSites to CSV" -ForegroundColor Green
+
+} # End foreach Site
 
 # Disconnect
 Disconnect-PnPOnline
 Write-LogEntry -LogName $Log -LogEntryText "Disconnected from PnP Online. Script finished."
 Write-Host "Script finished. Log file located at: $log" -ForegroundColor Green
+Write-Host "Output CSV located at: $outputfile" -ForegroundColor Green
