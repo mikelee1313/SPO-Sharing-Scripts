@@ -6,6 +6,17 @@ This script connects to a SharePoint tenant using PnP PowerShell with certificat
 
 The script collects and consolidates a variety of information into the output CSV file. Below is the list of columns that are included the output file:
 
+
+**API Requirements**
+
+- Microsoft Graph| Application |  Directory.Read.All 
+- SharePoint |Application | Sites.FullControl.All
+
+Example:
+
+![image](https://github.com/user-attachments/assets/be97b24e-f6c6-470e-9b3e-05666159a4c0)
+
+
 **Site Information**
 - URL - The URL of the SharePoint site.
 - Owner - The owner of the site.
