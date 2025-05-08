@@ -49,6 +49,10 @@
         - Certificate-based authentication configured
         - Script includes throttling handling for SharePoint Online
 
+    API Permissions:
+        - Microsoft Graph| Application | Directory.Read.All
+        - SharePoint |Application | Sites.FullControl.All
+
 Disclaimer: The sample scripts are provided AS IS without warranty of any kind. 
     Microsoft further disclaims all implied warranties including, without limitation, 
     any implied warranties of merchantability or of fitness for a particular purpose. 
