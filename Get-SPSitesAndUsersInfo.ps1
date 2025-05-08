@@ -41,17 +41,17 @@
 .NOTES
 
     Authors: Mike Lee
-    Date: 5/7/25
+    Date: 5/8/25
+    Script includes throttling handling for SharePoint Online
 
     Requirements:
-        - PnP.PowerShell module installed
+        - PnP.PowerShell module installed (Tested with PNP 2.12.0)
+        - PowerShell 7.4 or higer
         - Appropriate permissions granted to the Azure AD application
+            - Microsoft Graph| Application | Directory.Read.All
+            - SharePoint |Application | Sites.FullControl.All
         - Certificate-based authentication configured
-        - Script includes throttling handling for SharePoint Online
-
-    API Permissions:
-        - Microsoft Graph| Application | Directory.Read.All
-        - SharePoint |Application | Sites.FullControl.All
+        
 
 Disclaimer: The sample scripts are provided AS IS without warranty of any kind. 
     Microsoft further disclaims all implied warranties including, without limitation, 
