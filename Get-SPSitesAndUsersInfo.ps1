@@ -332,8 +332,9 @@ Function Update-SiteCollectionData {
         $siteCollectionData[$SiteUrl]["Has Sharing Links"] = $true
     }
 
-    # Check for "shared with everyone" through SP users
+    # Check for "shared with everyone" through SP users - ONLY WHEN EXPLICITLY FINDING the user
     if (-not [string]::IsNullOrWhiteSpace($SPUserLoginName) -and $SPUserLoginName -like "*spo-grid-all-users*") {
+        Write-LogEntry -LogName $Log -LogEntryText "Found LoginName with spo-grid-all-users: $SPUserLoginName - Setting 'Shared With Everyone' to TRUE for site $SiteUrl"
         $siteCollectionData[$SiteUrl]["Shared With Everyone"] = $true
     }
 
@@ -548,6 +549,51 @@ foreach ($site in $sites) {
             } -Operation "Connect to site $siteUrl" -LogName $Log
             
             Write-LogEntry -LogName $Log -LogEntryText "Successfully connected to specific site: $siteUrl"
+            
+            # Check for "spo-grid-all-users" at the site collection level - with additional debugging
+            try {
+                Write-LogEntry -LogName $Log -LogEntryText "Checking for 'Everyone' user at site collection level for $siteUrl"
+                
+                $allSiteUsers = Invoke-PnPWithRetry -ScriptBlock {
+                    Get-PnPUser -WithRightsAssigned
+                } -Operation "Get-PnPUser for site collection $siteUrl" -LogName $Log
+                
+                # Add debug logging to see what users are being returned
+                Write-LogEntry -LogName $Log -LogEntryText "Found $($allSiteUsers.Count) users at site collection level for $siteUrl"
+                
+                # Check if any user has "spo-grid-all-users" in their login name - with specific filter and debug
+                $everyoneUser = $allSiteUsers | Where-Object { 
+                    $hasPattern = $_.LoginName -like "*spo-grid-all-users*"
+                    if ($hasPattern -eq 'True') {
+                        Write-LogEntry -LogName $Log -LogEntryText "FOUND MATCH: User $($_.Title) with login $($_.LoginName) matches spo-grid-all-users pattern"
+                    }
+                    return $hasPattern
+                }
+                
+                if ($null -ne $everyoneUser -and $everyoneUser.Count -gt 0) {
+                    Write-LogEntry -LogName $Log -LogEntryText "Found 'Everyone' user (spo-grid-all-users) at site collection level on $siteUrl"
+                    
+                    # First initialize site data if not already done
+                    if (-not $siteCollectionData.ContainsKey($siteUrl)) {
+                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops
+                    }
+                    
+                    # Directly update the hashtable for this specific site
+                    $siteCollectionData[$siteUrl]["Shared With Everyone"] = $true
+                    Write-LogEntry -LogName $Log -LogEntryText "EXPLICITLY Setting 'Shared With Everyone' to TRUE for site $siteUrl"
+                }
+                else {
+                    Write-LogEntry -LogName $Log -LogEntryText "No 'Everyone' user found at site collection level for $siteUrl"
+                    
+                    # Ensure this site isn't incorrectly flagged
+                    if ($siteCollectionData.ContainsKey($siteUrl)) {
+                        $siteCollectionData[$siteUrl]["Shared With Everyone"] = $false
+                    }
+                }
+            }
+            catch {
+                Write-LogEntry -LogName $Log -LogEntryText "Error checking for 'Everyone' user at site collection level for $siteUrl : $_"
+            }
         }
         catch { Write-LogEntry -LogName $Log -LogEntryText "ERROR: Could not connect to site $siteUrl. Skipping SP Group/User processing. $_"; continue }
 
