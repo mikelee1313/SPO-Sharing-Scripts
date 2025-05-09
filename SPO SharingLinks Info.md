@@ -5,11 +5,11 @@ Lots of customers are in the process of getting ready for Copilot and identifyin
 
 Here are 3 sharable link types:
 
-•	People in [your organization]:  Gives anyone in your organization who has the link access to the file, whether they receive it directly from you or forwarded from someone else.
+•	**People in [your organization]**:  Gives anyone in your organization who has the link access to the file, whether they receive it directly from you or forwarded from someone else.
 
-•	People you choose gives access only to the people you specify, although other people may already have access. If people forward the sharing invitation, only people who already have access to the item will be able to use the link.  
+•	**People you choose**: gives access only to the people you specify, although other people may already have access. If people forward the sharing invitation, only people who already have access to the item will be able to use the link.  
 
-•	Anyone:  Gives access to anyone who receives this link, whether they receive it directly from you or forwarded from someone else. This may include people outside of your organization.
+•	**Anyone: ** Gives access to anyone who receives this link, whether they receive it directly from you or forwarded from someone else. This may include people outside of your organization.
 
 Example of sharing a file with everyone in the organization (Organization Links):
 
