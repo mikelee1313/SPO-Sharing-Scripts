@@ -78,3 +78,9 @@ Example:
 ![image](https://github.com/user-attachments/assets/9dccd5f1-1977-4e16-b1b4-e305153a9560)
 
 ![image](https://github.com/user-attachments/assets/1b04cdd8-f14b-4011-ad20-7c794a175412)
+
+
+Future Function:
+Collect Root users and Permissions
+
+
