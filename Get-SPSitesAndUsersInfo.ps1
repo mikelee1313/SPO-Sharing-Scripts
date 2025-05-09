@@ -34,9 +34,7 @@
         - Microsoft 365 group details (Display Name, Alias, Access Type, Creation Date)
         - Microsoft 365 group owners and members
         - Site collection administrators
-        - Indicators for sharing links and "Shared with Everyone" status
-
-    Log file capturing detailed execution steps, warnings, and errors.
+        - Indicators for sharing links and "EEEU Present" status
 
 .NOTES
 
@@ -307,7 +305,7 @@ Function Update-SiteCollectionData {
             "Entra Group Details"            = $null
             "Site Collection Admins"         = [System.Collections.Generic.List[PSObject]]::new() # Stores {Name, Email}
             "Has Sharing Links"              = $false # New property to track if sharing links are being used
-            "Shared With Everyone"           = $false # New property to track if shared with everyone
+            "EEEU Present"                   = $false # Renamed from "Shared With Everyone" to "EEEU Present"
         }
     }
     else {
@@ -334,8 +332,8 @@ Function Update-SiteCollectionData {
 
     # Check for "shared with everyone" through SP users - ONLY WHEN EXPLICITLY FINDING the user
     if (-not [string]::IsNullOrWhiteSpace($SPUserLoginName) -and $SPUserLoginName -like "*spo-grid-all-users*") {
-        Write-LogEntry -LogName $Log -LogEntryText "Found LoginName with spo-grid-all-users: $SPUserLoginName - Setting 'Shared With Everyone' to TRUE for site $SiteUrl"
-        $siteCollectionData[$SiteUrl]["Shared With Everyone"] = $true
+        Write-LogEntry -LogName $Log -LogEntryText "Found LoginName with spo-grid-all-users: $SPUserLoginName - Setting 'EEEU Present' to TRUE for site $SiteUrl"
+        $siteCollectionData[$SiteUrl]["EEEU Present"] = $true
     }
 
     # Add Site Collection Admin information (checking for duplicates based on email)
@@ -413,7 +411,7 @@ $csvHeaders = "URL,Owner,IB Mode,IB Segment,Group ID,RelatedGroupId,IsHubSite,Te
 "TeamsChannelType,StorageQuota (MB),StorageUsageCurrent (MB),LockState,LastContentModifiedDate,ArchiveState," + 
 "DefaultTrimMode,DefaultExpireAfterDays,MajorVersionLimit,Entra Group Displayname,Entra Group Alias," + 
 "Entra Group AccessType,Entra Group WhenCreated,Site Collection Admins (Name <Email>),Has Sharing Links," + 
-"Shared With Everyone,SP Groups On Site,SP Groups Roles,SP Users (Group: Name <Email>),Entra Group Owners (Name <Email>)," + 
+"EEEU Present,SP Groups On Site,SP Groups Roles,SP Users (Group: Name <Email>),Entra Group Owners (Name <Email>)," + 
 "Entra Group Members (Name <Email>)"
 
 # Create the CSV file with headers
@@ -490,7 +488,7 @@ function Export-SiteCollectionToCSV {
         "Entra Group WhenCreated"               = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".WhenCreated } else { $null }
         "Site Collection Admins (Name <Email>)" = $siteAdminsFormatted
         "Has Sharing Links"                     = if ($siteData."Has Sharing Links") { "True" } else { "False" }
-        "Shared With Everyone"                  = if ($siteData."Shared With Everyone") { "True" } else { "False" }
+        "EEEU Present"                          = if ($siteData."EEEU Present") { "True" } else { "False" }
         "SP Groups On Site"                     = ($siteData."SP Groups On Site" -join ';')
         "SP Groups Roles"                       = ($siteData."SP Group Roles Per Group".Values | Select-Object -Unique | Where-Object { $_ }) -join ';'
         # --- Combined Columns ---
@@ -579,15 +577,15 @@ foreach ($site in $sites) {
                     }
                     
                     # Directly update the hashtable for this specific site
-                    $siteCollectionData[$siteUrl]["Shared With Everyone"] = $true
-                    Write-LogEntry -LogName $Log -LogEntryText "EXPLICITLY Setting 'Shared With Everyone' to TRUE for site $siteUrl"
+                    $siteCollectionData[$siteUrl]["EEEU Present"] = $true
+                    Write-LogEntry -LogName $Log -LogEntryText "EXPLICITLY Setting 'EEEU Present' to TRUE for site $siteUrl"
                 }
                 else {
                     Write-LogEntry -LogName $Log -LogEntryText "No 'Everyone' user found at site collection level for $siteUrl"
                     
                     # Ensure this site isn't incorrectly flagged
                     if ($siteCollectionData.ContainsKey($siteUrl)) {
-                        $siteCollectionData[$siteUrl]["Shared With Everyone"] = $false
+                        $siteCollectionData[$siteUrl]["EEEU Present"] = $false
                     }
                 }
             }
