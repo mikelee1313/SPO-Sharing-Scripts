@@ -42,7 +42,7 @@
 .NOTES
 
     Authors: Mike Lee
-    Date: 5/8/25
+    Date: 5/12/25
     Script includes throttling handling for SharePoint Online
 
     Requirements:
@@ -162,7 +162,7 @@ Function Invoke-PnPWithRetry {
                 
                 # Check if we've hit max retries
                 if ($retryCount -ge $MaxRetries) {
-                    Write-LogEntry -LogName $LogName -LogEntryText "Max retries ($MaxRetries) reached for $Operation. Giving up." -LogLevel "ERROR"
+                    Write-LogEntry -LogName $Log -LogEntryText "Max retries ($MaxRetries) reached for $Operation. Giving up." -LogLevel "ERROR"
                     throw $_
                 }
                 
@@ -171,12 +171,12 @@ Function Invoke-PnPWithRetry {
                 if ($_.Exception.Response -and $_.Exception.Response.Headers -and $_.Exception.Response.Headers["Retry-After"]) {
                     $retryAfterValue = [int]$_.Exception.Response.Headers["Retry-After"]
                     $retryDelay = $retryAfterValue
-                    Write-LogEntry -LogName $LogName -LogEntryText "Throttling detected for $Operation. Server requested retry after $retryAfterValue seconds." -LogLevel "WARNING"
+                    Write-LogEntry -LogName $Log -LogEntryText "Throttling detected for $Operation. Server requested retry after $retryAfterValue seconds." -LogLevel "WARNING"
                 }
                 else {
                     # Use exponential backoff if no Retry-After header
                     $retryDelay = [Math]::Min(30, $retryDelay * 2)
-                    Write-LogEntry -LogName $LogName -LogEntryText "Throttling detected for $Operation. Using exponential backoff: waiting $retryDelay seconds before retry $retryCount of $MaxRetries." -LogLevel "WARNING"
+                    Write-LogEntry -LogName $Log -LogEntryText "Throttling detected for $Operation. Using exponential backoff: waiting $retryDelay seconds before retry $retryCount of $MaxRetries." -LogLevel "WARNING"
                 }
                 
                 Write-Host "Throttling detected for $Operation. Waiting $retryDelay seconds before retry $retryCount of $MaxRetries." -ForegroundColor Yellow
@@ -319,6 +319,7 @@ Function Update-SiteCollectionData {
             "Entra Group Members"            = [System.Collections.Generic.List[PSObject]]::new() # Stores {Name, Email}
             "Entra Group Details"            = $null
             "Site Collection Admins"         = [System.Collections.Generic.List[PSObject]]::new() # Stores {Name, Email}
+            "Site Level Users"               = [System.Collections.Generic.List[PSObject]]::new() # Stores {Name, Email, LoginName, Roles}
             "Has Sharing Links"              = $false # New property to track if sharing links are being used
             "EEEU Present"                   = $false # Renamed from "Shared With Everyone" to "EEEU Present"
         }
@@ -424,10 +425,10 @@ $processedCount = 0
 $csvHeaders = "URL,Owner,IB Mode,IB Segment,Group ID,RelatedGroupId,IsHubSite,Template,SiteDefinedSharingCapability," + 
 "SharingCapability,DisableCompanyWideSharingLinks,Custom Script Allowed,IsTeamsConnected,IsTeamsChannelConnected," + 
 "TeamsChannelType,StorageQuota (MB),StorageUsageCurrent (MB),LockState,LastContentModifiedDate,ArchiveState," + 
-"DefaultTrimMode,DefaultExpireAfterDays,MajorVersionLimit,Entra Group Displayname,Entra Group Alias," + 
-"Entra Group AccessType,Entra Group WhenCreated,Site Collection Admins (Name <Email>),Has Sharing Links," + 
-"EEEU Present,SP Groups On Site,SP Groups Roles,SP Users (Group: Name <Email>),Entra Group Owners (Name <Email>)," + 
-"Entra Group Members (Name <Email>)"
+"DefaultTrimMode,DefaultExpireAfterDays,MajorVersionLimit,Entra Group Alias," + 
+"Entra Group AccessType,Entra Group WhenCreated,Has Sharing Links," + 
+"EEEU Present,SP Groups On Site,SP Groups Roles,Site Collection Admins (Name <Email>)," +
+"Site Level Users (Name <Email> [Roles]), SP Users (Group: Name <Email>),Entra Group Owners (Name <Email>),Entra Group Members (Name <Email>)"
 
 # Create the CSV file with headers
 Set-Content -Path $outputfile -Value $csvHeaders -Encoding UTF8
@@ -471,45 +472,50 @@ function Export-SiteCollectionToCSV {
             $emailStr = $_.Email | Out-String -NoNewline
             "$($_.Name) <$emailStr>"
         }) -join ';'
+    
+    # Site Level Users: "Name <Email> [Roles]"
+    $siteLevelUsersFormatted = ($siteData."Site Level Users" | ForEach-Object {
+            $emailStr = $_.Email | Out-String -NoNewline
+            "$($_.Name) <$emailStr> [$($_.Roles)]"
+        }) -join ';'
 
     # --- Create the export object with combined columns ---
     $exportItem = [PSCustomObject]@{
-        URL                                     = $siteData.URL
-        Owner                                   = $siteData.Owner
-        "IB Mode"                               = $siteData."IB Mode"
-        "IB Segment"                            = $siteData."IB Segment"
-        "Group ID"                              = $siteData."Group ID"
-        RelatedGroupId                          = $siteData.RelatedGroupId
-        IsHubSite                               = $siteData.IsHubSite
-        Template                                = $siteData.Template
-        SiteDefinedSharingCapability            = $siteData.SiteDefinedSharingCapability
-        SharingCapability                       = $siteData.SharingCapability
-        DisableCompanyWideSharingLinks          = $siteData.DisableCompanyWideSharingLinks
-        "Custom Script Allowed"                 = if ($siteData."Custom Script Allowed") { "True" } else { "False" }
-        IsTeamsConnected                        = $siteData.IsTeamsConnected
-        IsTeamsChannelConnected                 = $siteData.IsTeamsChannelConnected
-        TeamsChannelType                        = $siteData.TeamsChannelType
-        "StorageQuota (MB)"                     = $siteData.StorageQuota
-        "StorageUsageCurrent (MB)"              = $siteData.StorageUsageCurrent
-        LockState                               = $siteData.LockState
-        LastContentModifiedDate                 = $siteData.LastContentModifiedDate
-        ArchiveState                            = $siteData.ArchiveState
-        DefaultTrimMode                         = $siteData.DefaultTrimMode
-        DefaultExpireAfterDays                  = if ($siteData.DefaultExpireAfterDays -eq -1) { "NotSet" } else { $siteData.DefaultExpireAfterDays }
-        MajorVersionLimit                       = if ($siteData.MajorVersionLimit -eq -1) { "NotSet" } else { $siteData.MajorVersionLimit }
-        "Entra Group Displayname"               = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".DisplayName } else { $null }
-        "Entra Group Alias"                     = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".Alias } else { $null }
-        "Entra Group AccessType"                = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".AccessType } else { $null }
-        "Entra Group WhenCreated"               = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".WhenCreated } else { $null }
-        "Site Collection Admins (Name <Email>)" = $siteAdminsFormatted
-        "Has Sharing Links"                     = if ($siteData."Has Sharing Links") { "True" } else { "False" }
-        "EEEU Present"                          = if ($siteData."EEEU Present") { "True" } else { "False" }
-        "SP Groups On Site"                     = ($siteData."SP Groups On Site" -join ';')
-        "SP Groups Roles"                       = ($siteData."SP Group Roles Per Group".Values | Select-Object -Unique | Where-Object { $_ }) -join ';'
-        # --- Combined Columns ---
-        "SP Users (Group: Name <Email>)"        = $spUsersFormatted       # Combined SP User Info
-        "Entra Group Owners (Name <Email>)"     = $entraOwnersFormatted   # Combined Owner Info
-        "Entra Group Members (Name <Email>)"    = $entraMembersFormatted  # Combined Member Info
+        URL                                       = $siteData.URL
+        Owner                                     = $siteData.Owner
+        "IB Mode"                                 = $siteData."IB Mode"
+        "IB Segment"                              = $siteData."IB Segment"
+        "Group ID"                                = $siteData."Group ID"
+        RelatedGroupId                            = $siteData.RelatedGroupId
+        IsHubSite                                 = $siteData.IsHubSite
+        Template                                  = $siteData.Template
+        SiteDefinedSharingCapability              = $siteData.SiteDefinedSharingCapability
+        SharingCapability                         = $siteData.SharingCapability
+        DisableCompanyWideSharingLinks            = $siteData.DisableCompanyWideSharingLinks
+        "Custom Script Allowed"                   = if ($siteData."Custom Script Allowed") { "True" } else { "False" }
+        IsTeamsConnected                          = $siteData.IsTeamsConnected
+        IsTeamsChannelConnected                   = $siteData.IsTeamsChannelConnected
+        TeamsChannelType                          = $siteData.TeamsChannelType
+        "StorageQuota (MB)"                       = $siteData.StorageQuota
+        "StorageUsageCurrent (MB)"                = $siteData.StorageUsageCurrent
+        LockState                                 = $siteData.LockState
+        LastContentModifiedDate                   = $siteData.LastContentModifiedDate
+        ArchiveState                              = $siteData.ArchiveState
+        DefaultTrimMode                           = $siteData.DefaultTrimMode
+        DefaultExpireAfterDays                    = if ($siteData.DefaultExpireAfterDays -eq -1) { "NotSet" } else { $siteData.DefaultExpireAfterDays }
+        MajorVersionLimit                         = if ($siteData.MajorVersionLimit -eq -1) { "NotSet" } else { $siteData.MajorVersionLimit }
+        "Entra Group Alias"                       = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".Alias } else { $null }
+        "Entra Group AccessType"                  = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".AccessType } else { $null }
+        "Entra Group WhenCreated"                 = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".WhenCreated } else { $null }
+        "Has Sharing Links"                       = if ($siteData."Has Sharing Links") { "True" } else { "False" }
+        "EEEU Present"                            = if ($siteData."EEEU Present") { "True" } else { "False" }
+        "SP Groups On Site"                       = ($siteData."SP Groups On Site" -join ';')
+        "SP Groups Roles"                         = ($siteData."SP Group Roles Per Group".Values | Select-Object -Unique | Where-Object { $_ }) -join ';'
+        "Site Collection Admins (Name <Email>)"   = $siteAdminsFormatted
+        "SP Users (Group: Name <Email>)"          = $spUsersFormatted       # Combined SP User Info
+        "Site Level Users (Name <Email> [Roles])" = $siteLevelUsersFormatted # Combined Site Level Users with Roles
+        "Entra Group Owners (Name <Email>)"       = $entraOwnersFormatted   # Combined Owner Info
+        "Entra Group Members (Name <Email>)"      = $entraMembersFormatted  # Combined Member Info
     }
 
     # Export this item as a single line to CSV (append mode)
@@ -603,9 +609,129 @@ foreach ($site in $sites) {
                         $siteCollectionData[$siteUrl]["EEEU Present"] = $false
                     }
                 }
+                
+                # NEW CODE: Process site level users with assigned permissions
+                if ($allSiteUsers -and $allSiteUsers.Count -gt 0) {
+                    Write-LogEntry -LogName $Log -LogEntryText "Processing $($allSiteUsers.Count) site level users with direct permissions on $siteUrl" -LogLevel "DEBUG"
+                    
+                    # Initialize the site level users collection if needed
+                    if (-not $siteCollectionData.ContainsKey($siteUrl)) {
+                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops
+                    }
+                    if ($null -eq $siteCollectionData[$siteUrl]["Site Level Users"]) {
+                        $siteCollectionData[$siteUrl]["Site Level Users"] = [System.Collections.Generic.List[PSObject]]::new()
+                    }
+                    
+                    # Get Web object once for permission checks
+                    $web = Invoke-PnPWithRetry -ScriptBlock { 
+                        Get-PnPWeb -Includes RoleAssignments 
+                    } -Operation "Get-PnPWeb with RoleAssignments for site level users on $siteUrl" -LogName $Log
+                    
+                    foreach ($siteUser in $allSiteUsers) {
+                        try {
+                            # Special handling for "Everyone" security group
+                            $isEveryone = $siteUser.LoginName -like "*spo-grid-all-users*"
+                            
+                            # Process both individual users and the Everyone security group
+                            if ($siteUser.PrincipalType -ne 'User' -and -not $isEveryone) {
+                                Write-LogEntry -LogName $Log -LogEntryText "Skipping non-User principal (except Everyone): '$($siteUser.Title)' ($($siteUser.PrincipalType)) on $siteUrl" -LogLevel "DEBUG"
+                                continue
+                            }
+                            
+                            $userName = $siteUser.Title
+                            $userEmail = $siteUser.Email
+                            $userLogin = $siteUser.LoginName
+                            
+                            # Skip system accounts or special accounts
+                            if ($userLogin -like "SHAREPOINT\system" -or 
+                                $userLogin -like "*app@sharepoint") {
+                                Write-LogEntry -LogName $Log -LogEntryText "Skipping system/special account: $userLogin" -LogLevel "DEBUG"
+                                continue
+                            }
+                            
+                            # Enhanced logging for Everyone group
+                            if ($isEveryone) {
+                                Write-LogEntry -LogName $Log -LogEntryText "Processing 'Everyone' security group ($userLogin) - will be included in site level users" -LogLevel "DEBUG"
+                            }
+                            
+                            # Get additional info from Azure AD if it's a user account
+                            if ($userLogin -like '*@*') {
+                                try {
+                                    $aadUser = Invoke-PnPWithRetry -ScriptBlock { 
+                                        Get-PnPAzureADUser -Identity $userLogin -ErrorAction SilentlyContinue 
+                                    } -Operation "Get-PnPAzureADUser for site user $userLogin" -LogName $Log
+                                    
+                                    if ($aadUser) { 
+                                        $userName = $aadUser.DisplayName
+                                        $userEmail = $aadUser.Mail
+                                    }
+                                }
+                                catch { 
+                                    Write-LogEntry -LogName $Log -LogEntryText "Warning: Getting AAD User info for site user '$userLogin' failed: $_" -LogLevel "WARNING" 
+                                }
+                            }
+                            
+                            # Get user's roles
+                            $userRoles = @()
+                            $hasDirectPermissions = $false
+                            
+                            foreach ($roleAssignment in $web.RoleAssignments) {
+                                try {
+                                    $member = Invoke-PnPWithRetry -ScriptBlock { 
+                                        Get-PnPProperty -ClientObject $roleAssignment -Property Member 
+                                    } -Operation "Get RoleAssignment Member for site user/group $userLogin" -LogName $Log
+                                    
+                                    # Check if this role assignment is for our current user/group
+                                    if ($member -and $member.LoginName -eq $userLogin) {
+                                        $hasDirectPermissions = $true
+                                        
+                                        $roleDefinitions = Invoke-PnPWithRetry -ScriptBlock { 
+                                            Get-PnPProperty -ClientObject $roleAssignment -Property RoleDefinitionBindings 
+                                        } -Operation "Get RoleDefinitionBindings for site user/group $userLogin" -LogName $Log
+                                        
+                                        foreach ($roleDef in $roleDefinitions) {
+                                            if ($roleDef -and $roleDef.Name) {
+                                                # Include all permission types for Everyone, but skip limited access for regular users
+                                                if ($isEveryone -or $roleDef.Name -ne "Limited Access") {
+                                                    $userRoles += $roleDef.Name
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                catch {
+                                    Write-LogEntry -LogName $Log -LogEntryText "Error getting roles for site user/group $userLogin : $_" -LogLevel "ERROR"
+                                }
+                            }
+                            
+                            # Add users/groups with direct permissions (and meaningful roles for regular users)
+                            if ($hasDirectPermissions -and ($isEveryone -or $userRoles.Count -gt 0)) {
+                                # Create user object with roles
+                                $userObject = [PSCustomObject]@{
+                                    Name      = if ($isEveryone) { $userName }
+                                    Email     = $userEmail
+                                    LoginName = $userLogin
+                                    Roles     = ($userRoles | Select-Object -Unique) -join ','
+                                }
+                                
+                                # Add to the collection
+                                $siteCollectionData[$siteUrl]["Site Level Users"].Add($userObject)
+                                Write-LogEntry -LogName $Log -LogEntryText "Added site level principal: $($userObject.Name) with roles: $($userObject.Roles)" -LogLevel "DEBUG"
+                            }
+                            else {
+                                Write-LogEntry -LogName $Log -LogEntryText "Skipping user/group $userName - No direct meaningful permissions" -LogLevel "DEBUG"
+                            }
+                        }
+                        catch {
+                            Write-LogEntry -LogName $Log -LogEntryText "Error processing site level user/group $($siteUser.Title): $_" -LogLevel "ERROR"
+                        }
+                    }
+                    
+                    Write-LogEntry -LogName $Log -LogEntryText "Completed processing site level users/groups for $siteUrl - Added $($siteCollectionData[$siteUrl]['Site Level Users'].Count) entries" -LogLevel "DEBUG"
+                }
             }
             catch {
-                Write-LogEntry -LogName $Log -LogEntryText "Error checking for 'Everyone' user at site collection level for $siteUrl : $_" -LogLevel "ERROR"
+                Write-LogEntry -LogName $Log -LogEntryText "Error checking for site level users at site collection level for $siteUrl : $_" -LogLevel "ERROR"
             }
         }
         catch { Write-LogEntry -LogName $Log -LogEntryText "ERROR: Could not connect to site $siteUrl. Skipping SP Group/User processing. $_" -LogLevel "ERROR"; continue }
@@ -687,7 +813,7 @@ foreach ($site in $sites) {
             }
         }
         catch {
-            Write-LogEntry -LogName $Log -LogEntryText "Error retrieving site collection administrators for site $siteUrl : $_" -LogLevel "ERROR"
+            Write-LogEntry -LogName $Log -LogEntryText "Error retrieving site collection administrators for $siteUrl : $_" -LogLevel "ERROR"
         }
 
         # --- Microsoft 365 Group Processing (if applicable) ---
@@ -698,7 +824,6 @@ foreach ($site in $sites) {
                 $AADGroups = Invoke-PnPWithRetry -ScriptBlock { 
                     Get-PnPMicrosoft365Group -Identity $siteprops.GroupId 
                 } -Operation "Get-PnPMicrosoft365Group for $($siteprops.GroupId)" -LogName $Log
-                
                 if ($AADGroups) {
                     Write-LogEntry -LogName $Log -LogEntryText "Successfully retrieved AAD Group details for $($siteprops.GroupId)." -LogLevel "DEBUG"
                     # Update site data with AAD Group details
