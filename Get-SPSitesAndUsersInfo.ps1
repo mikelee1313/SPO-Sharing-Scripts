@@ -97,7 +97,7 @@ $maxRetries = 5  # Maximum number of retry attempts
 $initialRetryDelay = 5  # Initial retry delay in seconds
 
 #Input / Output and Log Files
-$inputfile = 'C:\temp\sitelist.csv' #This is the input file with list of sites to process. If not provided, all sites will be processed.
+#$inputfile = 'C:\temp\sitelist.csv' #This is the input file with list of sites to process. If not provided, all sites will be processed.
 $outputfile = "$env:TEMP\" + 'SPSites_and_Users_Info_' + $date + '_' + "output.csv"
 $log = "$env:TEMP\" + 'SPSites_and_Users_Info_' + $date + '_' + "logfile.log"
 
@@ -239,7 +239,8 @@ else {
         
         # Use retry function for getting tenant sites which is prone to throttling
         $sites = Invoke-PnPWithRetry -ScriptBlock { 
-            Get-PnPTenantSite # Excludes OneDrive by default 
+            # Excludes OneDrive by default and Redirect Sites
+            Get-PnPTenantSite  -Filter { 'Url' -notlike '-my.sharepoint.com' } | Where-Object { $_.Template -ne 'RedirectSite#0'}
         } -Operation "Get-PnPTenantSite" -LogName $Log
         
         Write-Host "Found $($sites.Count) sites." -ForegroundColor Green
@@ -702,7 +703,7 @@ foreach ($site in $sites) {
                             if ($null -ne $memberGroup) {
                                 # Load AllowMembersEditMembership property
                                 Invoke-PnPWithRetry -ScriptBlock { 
-                                    Get-PnPProperty -ClientObject $memberGroup -Property AllowMembersEditMembership 
+                                    Get-PnPProperty -ClientObject $memberGroup -Property AllowMembersEditMembership | Out-Null
                                 } -Operation "Get-PnPProperty AllowMembersEditMembership for $siteUrl" -LogName $Log
                                 
                                 $allowMembersEditMembership = $memberGroup.AllowMembersEditMembership
