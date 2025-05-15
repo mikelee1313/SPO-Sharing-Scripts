@@ -37,13 +37,13 @@ Example:
 - LastContentModifiedDate: The date when the site's content was last modified.
 - ArchiveState: The archive state of the site.
 
-**Sharing Indicators**
+**Site Level Sharing Indicators**
 - AllowMembersEditMembership: Indicates if members can edit group membership.
 - MembersCanShare: Indicates if members can share content.
 - Has Sharing Links: Indicates if sharing links are being used.
 - SiteDefinedSharingCapability: Sharing settings defined at the site level.
 - SharingCapability: The overall sharing capability of the site.
-- DisableCompanyWideSharingLinks: Whether company-wide sharing links are disabled.
+- DisableCompanyWideSharingLinks: Whether company-wide sharing links are disabled at the Site level
 - EEEU Present: A flag indicating if the "Everyone Except External Users" group is present.
   
  **Version Policy**
