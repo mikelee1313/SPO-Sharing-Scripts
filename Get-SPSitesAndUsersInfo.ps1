@@ -42,7 +42,7 @@
 .NOTES
 
     Authors: Mike Lee
-    Date: 5/12/25
+    Date: 5/15/25
     Script includes throttling handling for SharePoint Online
 
     Requirements:
@@ -281,7 +281,12 @@ Function Update-SiteCollectionData {
         # --- Parameters for Version Policy ---
         [string] $DefaultTrimMode = "",
         [int] $DefaultExpireAfterDays = -1,  # Changed from 0 to -1 as default
-        [int] $MajorVersionLimit = -1        # Changed from 0 to -1 as default
+        [int] $MajorVersionLimit = -1,        # Changed from 0 to -1 as default
+        # --- Parameter for Community Site ---
+        [bool] $IsCommunity = $false,        # Parameter to indicate if site is a Community Site
+        # --- Parameters for Member Group Settings ---
+        [bool] $AllowMembersEditMembership = $false,
+        [bool] $MembersCanShare = $false
     )
 
     # Create site entry if it doesn't exist
@@ -311,6 +316,11 @@ Function Update-SiteCollectionData {
             "DefaultTrimMode"                = $DefaultTrimMode
             "DefaultExpireAfterDays"         = $DefaultExpireAfterDays
             "MajorVersionLimit"              = $MajorVersionLimit
+            # Community Site Status
+            "Community Site"                 = $IsCommunity
+            # Member Group Settings
+            "AllowMembersEditMembership"     = $AllowMembersEditMembership
+            "MembersCanShare"                = $MembersCanShare
             # Site-specific lists
             "SP Groups On Site"              = [System.Collections.Generic.List[string]]::new()
             "SP Group Roles Per Group"       = [System.Collections.Generic.Dictionary[string, string]]::new()
@@ -320,11 +330,16 @@ Function Update-SiteCollectionData {
             "Entra Group Details"            = $null
             "Site Collection Admins"         = [System.Collections.Generic.List[PSObject]]::new() # Stores {Name, Email}
             "Site Level Users"               = [System.Collections.Generic.List[PSObject]]::new() # Stores {Name, Email, LoginName, Roles}
-            "Has Sharing Links"              = $false # New property to track if sharing links are being used
-            "EEEU Present"                   = $false # Renamed from "Shared With Everyone" to "EEEU Present"
+            "Has Sharing Links"              = $false #Property to track if sharing links are being used
+            "EEEU Present"                   = $false #"Shared With Everyone" =  "EEEU Present"
         }
     }
     else {
+        # Update Community Site status if provided
+        if ($PSBoundParameters.ContainsKey('IsCommunity')) {
+            $siteCollectionData[$SiteUrl]["Community Site"] = $IsCommunity
+        }
+        
         # If the site entry exists and version policy parameters are provided, update them
         if (-not [string]::IsNullOrEmpty($DefaultTrimMode)) {
             $siteCollectionData[$SiteUrl]["DefaultTrimMode"] = $DefaultTrimMode
@@ -338,6 +353,15 @@ Function Update-SiteCollectionData {
         # Updated to handle zero values correctly
         if ($MajorVersionLimit -ge 0) {
             $siteCollectionData[$SiteUrl]["MajorVersionLimit"] = $MajorVersionLimit
+        }
+
+        # Update Member Group Settings if provided
+        if ($PSBoundParameters.ContainsKey('AllowMembersEditMembership')) {
+            $siteCollectionData[$SiteUrl]["AllowMembersEditMembership"] = $AllowMembersEditMembership
+        }
+        
+        if ($PSBoundParameters.ContainsKey('MembersCanShare')) {
+            $siteCollectionData[$SiteUrl]["MembersCanShare"] = $MembersCanShare
         }
     }
 
@@ -423,11 +447,11 @@ $processedCount = 0
 
 # Create CSV with headers first
 $csvHeaders = "URL,Owner,IB Mode,IB Segment,Group ID,RelatedGroupId,IsHubSite,Template,SiteDefinedSharingCapability," + 
-"SharingCapability,DisableCompanyWideSharingLinks,Custom Script Allowed,IsTeamsConnected,IsTeamsChannelConnected," + 
+"SharingCapability,DisableCompanyWideSharingLinks,AllowMembersEditMembership,MembersCanShare,Custom Script Allowed,IsTeamsConnected,IsTeamsChannelConnected," + 
 "TeamsChannelType,StorageQuota (MB),StorageUsageCurrent (MB),LockState,LastContentModifiedDate,ArchiveState," + 
 "DefaultTrimMode,DefaultExpireAfterDays,MajorVersionLimit,Entra Group Alias," + 
 "Entra Group AccessType,Entra Group WhenCreated,Has Sharing Links," + 
-"EEEU Present,SP Groups On Site,SP Groups Roles,Site Collection Admins (Name <Email>)," +
+"EEEU Present,Community Site,SP Groups On Site,SP Groups Roles,Site Collection Admins (Name <Email>)," +
 "Site Level Users (Name <Email> [Roles]), SP Users (Group: Name <Email>),Entra Group Owners (Name <Email>),Entra Group Members (Name <Email>)"
 
 # Create the CSV file with headers
@@ -509,6 +533,9 @@ function Export-SiteCollectionToCSV {
         "Entra Group WhenCreated"                 = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".WhenCreated } else { $null }
         "Has Sharing Links"                       = if ($siteData."Has Sharing Links") { "True" } else { "False" }
         "EEEU Present"                            = if ($siteData."EEEU Present") { "True" } else { "False" }
+        "Community Site"                          = if ($siteData."Community Site") { "True" } else { "False" }
+        "AllowMembersEditMembership"              = if ($siteData."AllowMembersEditMembership") { "True" } else { "False" }
+        "MembersCanShare"                         = if ($siteData."MembersCanShare") { "True" } else { "False" }
         "SP Groups On Site"                       = ($siteData."SP Groups On Site" -join ';')
         "SP Groups Roles"                         = ($siteData."SP Group Roles Per Group".Values | Select-Object -Unique | Where-Object { $_ }) -join ';'
         "Site Collection Admins (Name <Email>)"   = $siteAdminsFormatted
@@ -569,6 +596,35 @@ foreach ($site in $sites) {
             
             Write-LogEntry -LogName $Log -LogEntryText "Successfully connected to specific site: $siteUrl" -LogLevel "DEBUG"
             
+            # Check if this is a Community Site by examining navigation nodes for Yammer link
+            try {
+                Write-LogEntry -LogName $Log -LogEntryText "Checking if site $siteUrl is a Community Site" -LogLevel "DEBUG"
+                
+                $isCommunity = $false
+                $navNodes = Invoke-PnPWithRetry -ScriptBlock {
+                    Get-PnPNavigationNode
+                } -Operation "Get-PnPNavigationNode for site $siteUrl" -LogName $Log
+                
+                # Look for "Conversations" node with a URL containing "yammer.com"
+                $yammerNode = $navNodes | Where-Object { 
+                    $_.Title -eq "Conversations" -and $_.Url -like "*yammer.com*" 
+                }
+                
+                if ($null -ne $yammerNode) {
+                    Write-LogEntry -LogName $Log -LogEntryText "Found Yammer integration on site $($siteUrl): $($yammerNode.Url)" -LogLevel "DEBUG"
+                    $isCommunity = $true
+                }
+                
+                # Update site data with Community Site status
+                Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -IsCommunity $isCommunity
+                Write-LogEntry -LogName $Log -LogEntryText "Set Community Site status to $isCommunity for site $siteUrl" -LogLevel "DEBUG"
+            }
+            catch {
+                Write-LogEntry -LogName $Log -LogEntryText "Error checking for Community Site status for $siteUrl : $_" -LogLevel "ERROR"
+                # Ensure Community Site is set to false if an error occurs
+                Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -IsCommunity $false
+            }
+            
             # Check for "spo-grid-all-users" at the site collection level - with additional debugging
             try {
                 Write-LogEntry -LogName $Log -LogEntryText "Checking for 'Everyone' user at site collection level for $siteUrl" -LogLevel "DEBUG"
@@ -610,7 +666,7 @@ foreach ($site in $sites) {
                     }
                 }
                 
-                # NEW CODE: Process site level users with assigned permissions
+                # Process site level users with assigned permissions
                 if ($allSiteUsers -and $allSiteUsers.Count -gt 0) {
                     Write-LogEntry -LogName $Log -LogEntryText "Processing $($allSiteUsers.Count) site level users with direct permissions on $siteUrl" -LogLevel "DEBUG"
                     
@@ -624,8 +680,42 @@ foreach ($site in $sites) {
                     
                     # Get Web object once for permission checks
                     $web = Invoke-PnPWithRetry -ScriptBlock { 
-                        Get-PnPWeb -Includes RoleAssignments 
+                        Get-PnPWeb -Includes RoleAssignments, AssociatedMemberGroup, MembersCanShare 
                     } -Operation "Get-PnPWeb with RoleAssignments for site level users on $siteUrl" -LogName $Log
+                    
+                    # Capture AllowMembersEditMembership and MembersCanShare properties
+                    $allowMembersEditMembership = $false
+                    $membersCanShare = $false
+                    
+                    if ($null -ne $web.MembersCanShare) {
+                        $membersCanShare = $web.MembersCanShare
+                        Write-LogEntry -LogName $Log -LogEntryText "MembersCanShare value for site $($siteUrl): $membersCanShare" -LogLevel "DEBUG"
+                    }
+                    
+                    if ($null -ne $web.AssociatedMemberGroup) {
+                        # Need to load AssociatedMemberGroup.AllowMembersEditMembership explicitly
+                        try {
+                            $memberGroup = Invoke-PnPWithRetry -ScriptBlock { 
+                                Get-PnPProperty -ClientObject $web -Property AssociatedMemberGroup 
+                            } -Operation "Get-PnPProperty AssociatedMemberGroup for $siteUrl" -LogName $Log
+                            
+                            if ($null -ne $memberGroup) {
+                                # Load AllowMembersEditMembership property
+                                Invoke-PnPWithRetry -ScriptBlock { 
+                                    Get-PnPProperty -ClientObject $memberGroup -Property AllowMembersEditMembership 
+                                } -Operation "Get-PnPProperty AllowMembersEditMembership for $siteUrl" -LogName $Log
+                                
+                                $allowMembersEditMembership = $memberGroup.AllowMembersEditMembership
+                                Write-LogEntry -LogName $Log -LogEntryText "AllowMembersEditMembership value for site $($siteUrl): $allowMembersEditMembership" -LogLevel "DEBUG"
+                            }
+                        }
+                        catch {
+                            Write-LogEntry -LogName $Log -LogEntryText "Error getting AssociatedMemberGroup.AllowMembersEditMembership for $($siteUrl): $_" -LogLevel "ERROR"
+                        }
+                    }
+                    
+                    # Update site data with the AllowMembersEditMembership properties
+                    Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -AllowMembersEditMembership $allowMembersEditMembership -MembersCanShare $membersCanShare
                     
                     foreach ($siteUser in $allSiteUsers) {
                         try {
