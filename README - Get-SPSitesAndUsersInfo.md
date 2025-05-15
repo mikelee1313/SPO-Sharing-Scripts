@@ -18,53 +18,53 @@ Example:
 
 
 **Site Information**
-- URL - The URL of the SharePoint site.
-- Owner - The owner of the site.
-- IB Mode - Information Barrier (IB) mode for the site.
-- IB Segment - Information Barrier segments for the site.
-- Group ID - Microsoft 365 Group ID associated with the site (if applicable).
-- RelatedGroupId - Related Group ID for the site (if applicable).
-- IsHubSite - Indicates if the site is a Hub Site.
-- Template - The template used for the site.
-- SiteDefinedSharingCapability - Site-defined sharing capability.
-- SharingCapability - Overall sharing capability for the site.
-- DisableCompanyWideSharingLinks - Indicates if company-wide sharing links are disabled.
-- Custom Script Allowed - Indicates if custom scripts are allowed.
-- IsTeamsConnected - Indicates if the site is connected to Microsoft Teams.
-- IsTeamsChannelConnected - Indicates if the site has a connected Teams channel.
-- TeamsChannelType - Type of Teams channel connected to the site.
-- StorageQuota (MB) - Total storage quota of the site in MB.
-- StorageUsageCurrent (MB) - Current storage usage of the site in MB.
-- LockState - Lock state of the site.
-- LastContentModifiedDate - Last content modification date of the site.
-- ArchiveState - Archive state of the site.
-
-**Version Policy**
-- DefaultTrimMode - Default trim mode for versioning.
-- DefaultExpireAfterDays - The lifespan of items before they expire (if set).
-- MajorVersionLimit - Limit on the number of major versions stored.
-
-**Microsoft 365 Group Details**
-- Entra Group Displayname - Display name of the associated Entra (Microsoft 365) Group.
-- Entra Group Alias - Alias of the associated Microsoft 365 Group.
-- Entra Group AccessType - Access type (e.g., public or private) of the Microsoft 365 Group.
-- Entra Group WhenCreated - Creation date of the Microsoft 365 Group.
-
-**Site Collection Administrators**
-- Site Collection Admins (Name <Email>) - List of site collection administrators in the format "Name <Email>".
+- URL: The URL of the SharePoint site.
+- Owner: The owner of the site.
+- IB Mode: Information Barrier (IB) mode applied to the site.
+- IB Segment: The Information Barrier segments associated with the site.
+- Group ID: The ID of the associated Microsoft 365 group.
+- RelatedGroupId: The ID of a related Microsoft 365 group, if any.
+- IsHubSite: Indicates if the site is a hub site.
+- Template: The site template used.
+- Community Site: Indicates if the site is a community site (e.g., Yammer-linked).
+- Custom Script Allowed: Indicates if custom scripts are allowed on the site.
+- IsTeamsConnected: Indicates if the site is connected to Microsoft Teams.
+- IsTeamsChannelConnected: Indicates if the site is connected to a Teams channel.
+- TeamsChannelType: Specifies the type of Teams channel connected.
+- StorageQuota (MB): The storage quota allocated to the site, in megabytes.
+- StorageUsageCurrent (MB): The current storage usage of the site, in megabytes.
+- LockState: The current lock state of the site.
+- LastContentModifiedDate: The date when the site's content was last modified.
+- ArchiveState: The archive state of the site.
 
 **Sharing Indicators**
-- Has Sharing Links - Indicates if there are sharing links.
-- Shared With Everyone - Indicates if the site is shared with "Everyone."
+- AllowMembersEditMembership: Indicates if members can edit group membership.
+- MembersCanShare: Indicates if members can share content.
+- Has Sharing Links: Indicates if sharing links are being used.
+- SiteDefinedSharingCapability: Sharing settings defined at the site level.
+- SharingCapability: The overall sharing capability of the site.
+- DisableCompanyWideSharingLinks: Whether company-wide sharing links are disabled.
+- EEEU Present: A flag indicating if the "Everyone Except External Users" group is present.
+  
+ **Version Policy**
+- DefaultTrimMode: Default trimming mode for versioning.
+- DefaultExpireAfterDays: Number of days after which content expires by default.
+- MajorVersionLimit: The maximum number of major versions retained.
 
-**SharePoint Groups**
-- SP Groups On Site - List of SharePoint groups on the site.
-- SP Groups Roles - Roles assigned to the SharePoint groups.
+**Microsoft 365 Group Details**
+- Entra Group Alias: Alias of the associated Microsoft 365 (Entra) group.
+- Entra Group AccessType: Access type of the Microsoft 365 group.
+- Entra Group WhenCreated: Creation date of the Microsoft 365 group.
 
-**Site Users**
-- SP Users (Group: Name <Email>) - List of SharePoint users, grouped by associated SharePoint groups, in the format "Group:Name <Email>".
-- Entra Group Owners (Name <Email>) - List of Microsoft 365 Group owners in the format "Name <Email>".
-- Entra Group Members (Name <Email>) - List of Microsoft 365 Group members in the format "Name <Email>".
+**Users and groups in the Site**
+- SP Groups On Site: List of all SharePoint groups on the site.
+- SP Groups Roles: Roles assigned to each SharePoint group.
+- Site Collection Admins (Name <Email>): Site collection administrators with their names and emails.
+- SP Users (Group: Name <Email>): SharePoint users with their groups, names, and emails.
+- Site Level Users (Name <Email> [Roles]): Site-level users with their roles.
+- Entra Group Owners (Name <Email>): Owners of the associated Microsoft 365 group.
+- Entra Group Members (Name <Email>): Members of the associated Microsoft 365 group.
+
 
   
 **Output Examples:**
