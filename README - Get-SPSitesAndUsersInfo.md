@@ -81,6 +81,7 @@ Example:
 
 
 Future Function:
-Collect Root users and Permissions
+Sharing link / EEEU total counts per site collection
+Support for Dymanic Groups 
 
 
