@@ -16,6 +16,9 @@
     Date Created   : 5/7/25
     Prerequisite   : 
     -    PnP PowerShell module (Tested with PNP 2.12.0)
+    -    Microsoft Graph API permissions for app-only authentication
+            Graph: Files.Read.All (Application)
+            SharePoint: Sites.FullControl.All (Application) 
     -    App registration in Entra ID with certificate
 
 .Disclaimer: The sample scripts are provided AS IS without warranty of any kind. 
