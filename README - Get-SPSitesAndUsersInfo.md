@@ -82,6 +82,7 @@ Example:
 
 Future Function:
 Sharing link / EEEU total counts per site collection
-Support for Dymanic Groups 
+Support for nested Groups
+Support For Subsets
 
 
