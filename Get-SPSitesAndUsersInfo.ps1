@@ -42,7 +42,7 @@
 .NOTES
 
     Authors: Mike Lee
-    Date: 5/15/25
+    Date: 5/23/25
     Script includes throttling handling for SharePoint Online
 
     Requirements:
@@ -97,7 +97,7 @@ $maxRetries = 5  # Maximum number of retry attempts
 $initialRetryDelay = 5  # Initial retry delay in seconds
 
 #Input / Output and Log Files
-#$inputfile = 'C:\temp\sitelist.csv' #This is the input file with list of sites to process. If not provided, all sites will be processed.
+$inputfile = "C:\temp\sitelist-m365x61250205.csv" #This is the input file with list of sites to process. If not provided, all sites will be processed.
 $outputfile = "$env:TEMP\" + 'SPSites_and_Users_Info_' + $date + '_' + "output.csv"
 $log = "$env:TEMP\" + 'SPSites_and_Users_Info_' + $date + '_' + "logfile.log"
 
@@ -240,7 +240,7 @@ else {
         # Use retry function for getting tenant sites which is prone to throttling
         $sites = Invoke-PnPWithRetry -ScriptBlock { 
             # Excludes OneDrive by default and Redirect Sites
-            Get-PnPTenantSite  -Filter { 'Url' -notlike '-my.sharepoint.com' } | Where-Object { $_.Template -ne 'RedirectSite#0'}
+            Get-PnPTenantSite  -Filter { 'Url' -notlike '-my.sharepoint.com' } | Where-Object { $_.Template -ne 'RedirectSite#0' }
         } -Operation "Get-PnPTenantSite" -LogName $Log
         
         Write-Host "Found $($sites.Count) sites." -ForegroundColor Green
@@ -287,7 +287,9 @@ Function Update-SiteCollectionData {
         [bool] $IsCommunity = $false,        # Parameter to indicate if site is a Community Site
         # --- Parameters for Member Group Settings ---
         [bool] $AllowMembersEditMembership = $false,
-        [bool] $MembersCanShare = $false
+        [bool] $MembersCanShare = $false,
+        # --- Parameter for Subsites Detection ---
+        [bool] $ContainsSubSites = $false    # Parameter to indicate if site contains subsites
     )
 
     # Create site entry if it doesn't exist
@@ -322,6 +324,8 @@ Function Update-SiteCollectionData {
             # Member Group Settings
             "AllowMembersEditMembership"     = $AllowMembersEditMembership
             "MembersCanShare"                = $MembersCanShare
+            # Subsites Detection
+            "Contains SubSites"              = $ContainsSubSites
             # Site-specific lists
             "SP Groups On Site"              = [System.Collections.Generic.List[string]]::new()
             "SP Group Roles Per Group"       = [System.Collections.Generic.Dictionary[string, string]]::new()
@@ -339,6 +343,11 @@ Function Update-SiteCollectionData {
         # Update Community Site status if provided
         if ($PSBoundParameters.ContainsKey('IsCommunity')) {
             $siteCollectionData[$SiteUrl]["Community Site"] = $IsCommunity
+        }
+        
+        # Update Subsites status if provided
+        if ($PSBoundParameters.ContainsKey('ContainsSubSites')) {
+            $siteCollectionData[$SiteUrl]["Contains SubSites"] = $ContainsSubSites
         }
         
         # If the site entry exists and version policy parameters are provided, update them
@@ -452,7 +461,7 @@ $csvHeaders = "URL,Owner,IB Mode,IB Segment,Group ID,RelatedGroupId,IsHubSite,Te
 "TeamsChannelType,StorageQuota (MB),StorageUsageCurrent (MB),LockState,LastContentModifiedDate,ArchiveState," + 
 "DefaultTrimMode,DefaultExpireAfterDays,MajorVersionLimit,Entra Group Alias," + 
 "Entra Group AccessType,Entra Group WhenCreated,Has Sharing Links," + 
-"EEEU Present,Community Site,SP Groups On Site,SP Groups Roles,Site Collection Admins (Name <Email>)," +
+"EEEU Present,Community Site,Contains SubSites,SP Groups On Site,SP Groups Roles,Site Collection Admins (Name <Email>)," +
 "Site Level Users (Name <Email> [Roles]), SP Users (Group: Name <Email>),Entra Group Owners (Name <Email>),Entra Group Members (Name <Email>)"
 
 # Create the CSV file with headers
@@ -535,6 +544,7 @@ function Export-SiteCollectionToCSV {
         "Has Sharing Links"                       = if ($siteData."Has Sharing Links") { "True" } else { "False" }
         "EEEU Present"                            = if ($siteData."EEEU Present") { "True" } else { "False" }
         "Community Site"                          = if ($siteData."Community Site") { "True" } else { "False" }
+        "Contains SubSites"                       = if ($siteData."Contains SubSites") { "True" } else { "False" }
         "AllowMembersEditMembership"              = if ($siteData."AllowMembersEditMembership") { "True" } else { "False" }
         "MembersCanShare"                         = if ($siteData."MembersCanShare") { "True" } else { "False" }
         "SP Groups On Site"                       = ($siteData."SP Groups On Site" -join ';')
@@ -571,6 +581,7 @@ foreach ($site in $sites) {
     $groupmembersRaw = $null # M365 Group Members
     $groupownersRaw = $null # M365 Group Owners
     $currentPnPConnection = $null # To hold the site-specific connection if successful
+    $containsSubSites = $false # Default value for SubSites detection
 
     try {
         # Get Site Properties using the Admin connection context
@@ -596,6 +607,31 @@ foreach ($site in $sites) {
             } -Operation "Connect to site $siteUrl" -LogName $Log
             
             Write-LogEntry -LogName $Log -LogEntryText "Successfully connected to specific site: $siteUrl" -LogLevel "DEBUG"
+            
+            # Check for subsites
+            try {
+                Write-LogEntry -LogName $Log -LogEntryText "Checking for subsites on site $siteUrl" -LogLevel "DEBUG"
+                
+                $subsites = Invoke-PnPWithRetry -ScriptBlock {
+                    Get-PnPSubWeb -Recurse:$false -ErrorAction SilentlyContinue
+                } -Operation "Get-PnPSubWeb for site $siteUrl" -LogName $Log
+                
+                if ($null -ne $subsites -and $subsites.Count -gt 0) {
+                    $containsSubSites = $true
+                    Write-LogEntry -LogName $Log -LogEntryText "Found $($subsites.Count) subsites on site $siteUrl" -LogLevel "DEBUG"
+                }
+                else {
+                    Write-LogEntry -LogName $Log -LogEntryText "No subsites found on site $siteUrl" -LogLevel "DEBUG"
+                }
+                
+                # Update site data with SubSites status
+                Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -ContainsSubSites $containsSubSites
+            }
+            catch {
+                Write-LogEntry -LogName $Log -LogEntryText "Error checking for subsites on site $siteUrl : $_" -LogLevel "ERROR"
+                # Ensure SubSites is set to false if an error occurs
+                Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -ContainsSubSites $false
+            }
             
             # Check if this is a Community Site by examining navigation nodes for Yammer link
             try {
