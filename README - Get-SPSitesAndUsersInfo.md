@@ -31,6 +31,7 @@ Example:
 - IsTeamsConnected: Indicates if the site is connected to Microsoft Teams.
 - IsTeamsChannelConnected: Indicates if the site is connected to a Teams channel.
 - TeamsChannelType: Specifies the type of Teams channel connected.
+- Contains SubSites: Indicates if the site collection has 1 or more SubSites
 - StorageQuota (MB): The storage quota allocated to the site, in megabytes.
 - StorageUsageCurrent (MB): The current storage usage of the site, in megabytes.
 - LockState: The current lock state of the site.
