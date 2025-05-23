@@ -618,7 +618,7 @@ foreach ($site in $sites) {
                 
                 if ($null -ne $subsites -and $subsites.Count -gt 0) {
                     $containsSubSites = $true
-                    Write-LogEntry -LogName $Log -LogEntryText "Found $($subsites.Count) subsites on site $siteUrl" -LogLevel "DEBUG"
+                    Write-LogEntry -LogName $Log -LogEntryText "Found $($subsites.Count) subsites on site $siteUrl" -LogLevel "WARNING"
                 }
                 else {
                     Write-LogEntry -LogName $Log -LogEntryText "No subsites found on site $siteUrl" -LogLevel "DEBUG"
