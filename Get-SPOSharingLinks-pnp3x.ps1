@@ -11,11 +11,11 @@
     This script uses predefined variables that need to be set at the beginning of the script.
 
 .NOTES
-    File Name      : Get-SPOSharingLinks.ps1
+    File Name      : Get-SPOSharingLinks-pnp3x.ps1
     Author         : Mike Lee
-    Date Created   : 5/20/25
+    Date Created   : 5/27/25
     Prerequisite   : 
-    -    PnP PowerShell module (Tested with PNP 3.1.0)
+    -    PnP PowerShell module (Tested with PNP 2.12.0)
     -    Microsoft Graph API permissions for app-only authentication
             Graph: Files.Read.All (Application)
             SharePoint: Sites.FullControl.All (Application) 
@@ -491,7 +491,7 @@ foreach ($site in $sites) {
                             try {
                                 # Get an access token for Microsoft Graph
                                 $graphToken = Invoke-WithThrottleHandling -ScriptBlock {
-                                    Get-PnPAccessToken 
+                                    Get-PnPAccessToken
                                 } -Operation "Get-PnPAccessToken"
                                 
                                 if ($graphToken) {
@@ -618,38 +618,11 @@ foreach ($site in $sites) {
 # Final Output Generation
 # ----------------------------------------------
 Write-Host "Consolidating results..." -ForegroundColor Green
-$finalOutput = [System.Collections.Generic.List[PSObject]]::new()
 
-foreach ($siteUrl in $siteCollectionData.Keys) {
-    $siteData = $siteCollectionData[$siteUrl]
-    
-    # Create export item with only needed properties
-    $exportItem = [PSCustomObject]@{
-        URL                     = $siteData.URL
-        Owner                   = $siteData.Owner
-        "IB Mode"               = $siteData."IB Mode"
-        "IB Segment"            = $siteData."IB Segment"
-        Template                = $siteData.Template
-        SharingCapability       = $siteData.SharingCapability
-        IsTeamsConnected        = $siteData.IsTeamsConnected
-        LastContentModifiedDate = $siteData.LastContentModifiedDate
-        "Has Sharing Links"     = if ($siteData."Has Sharing Links") { "True" } else { "False" }
-        "SP Groups On Site"     = ($siteData."SP Groups On Site" -join ';')
-    }
-    $finalOutput.Add($exportItem)
-}
-
-# Export the main site collection data
-$finalOutput | Export-Csv -Path $outputfile -NoTypeInformation -Encoding UTF8
-Write-Host "Site collection data successfully written to: $outputfile" -ForegroundColor Green
-Write-LogEntry -LogName $Log -LogEntryText "Site collection data successfully written to: $outputfile"
-
-# ----------------------------------------------
-# Output sharing links summary
-# ----------------------------------------------
+# No incremental file generation - only focus on sharing links output
 if ($sitesWithSharingLinksCount -gt 0) {
     Write-Host "Found $sitesWithSharingLinksCount site collections with sharing links" -ForegroundColor Green
-    Write-Host "Sharing links data written incrementally to: $sharingLinksOutputFile" -ForegroundColor Green
+    Write-Host "Sharing links data written to: $sharingLinksOutputFile" -ForegroundColor Green
     Write-LogEntry -LogName $Log -LogEntryText "Total sites with sharing links: $sitesWithSharingLinksCount"
 }
 else {
