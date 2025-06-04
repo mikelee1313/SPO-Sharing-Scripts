@@ -15,7 +15,7 @@
     Author         : Mike Lee
     Date Created   : 5/27/25
     Prerequisite   : 
-    -    PnP PowerShell module (Tested with PNP 2.12.0)
+    -    PnP PowerShell module (Tested with PNP 3.1.0)
     -    Microsoft Graph API permissions for app-only authentication
             Graph: Files.Read.All (Application)
             SharePoint: Sites.FullControl.All (Application) 
