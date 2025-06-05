@@ -30,7 +30,7 @@
     File Name      : Get-SPSitesAndUsersInfo2.ps1
     Author         : Mike Lee
     Prerequisite   : PnP.PowerShell module installed
-    Date           : 6/3/25     
+    Date           : 6/4/25     
     Version        : 2.0
 
     Requirements:
@@ -198,13 +198,13 @@ Function Get-CachedPnPAzureADUser {
         Write-LogEntry -LogName $LogName -LogEntryText "AAD User '$Identity' found in cache." -LogLevel "DEBUG"
         return $cachedUser # Return cached user object
     }
-
-    try {
+     try {
         # User not in cache, fetch from API
         Write-LogEntry -LogName $LogName -LogEntryText "Fetching AAD User '$Identity' from API." -LogLevel "DEBUG"
+        $upn = $Identity.Split('|')[-1] # Extract UPN
         $user = Invoke-PnPWithRetry -ScriptBlock { 
-            Get-PnPAzureADUser -Identity $Identity -ErrorAction SilentlyContinue # Suppress non-terminating errors for checking existence
-        } -Operation "Get-PnPAzureADUser for $Identity (Cached)" -LogName $LogName
+            Get-PnPAzureADUser -Identity $upn -ErrorAction SilentlyContinue # Suppress non-terminating errors for checking existence
+        } -Operation "Get-PnPAzureADUser for $upn (Cached)" -LogName $LogName
         
         if ($user) {
             $aadUserCache[$cacheKey] = $user # Add found user to cache
