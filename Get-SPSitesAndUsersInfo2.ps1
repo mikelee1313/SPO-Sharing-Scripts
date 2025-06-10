@@ -26,12 +26,19 @@
     Optional. Path to a CSV file containing a list of sites to process. If not provided, all sites will be processed.
     CSV should have a header of "URL" with site URLs in the first column.
 
+.PARAMETER maxcount
+    Optional. The maximum number of users or groups to list in a single cell before showing a summary. Default is 150.
+
+.PARAMETER ExpandDynamicDLs
+    Optional. Specifies whether to expand dynamic Microsoft 365 groups to list their members.
+    Set to $false to list the membership rule instead of members for dynamic groups. Default is $false.
+
 .NOTES
     File Name      : Get-SPSitesAndUsersInfo2.ps1
-    Author         : Mike Lee
+    Author         : Mike Lee / Andrew Thompson
     Prerequisite   : PnP.PowerShell module installed
-    Date           : 6/4/25     
-    Version        : 2.0
+    Date           : 6/10/25     
+    Version        : 2.1
 
     Requirements:
         - PnP.PowerShell module installed (Tested with PNP 2.12.0)
@@ -60,6 +67,7 @@
     $thumbprint = "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0"
     $tenant = "87654321-4321-4321-4321-ba0987654321"
     $inputfile = "C:\temp\sitelist-contoso.csv"
+    $maxcount = 150
     .\Get-SPSitesAndUsersInfo2.ps1
 #>
 
@@ -69,6 +77,8 @@ $appID = "5baa1427-1e90-4501-831d-a8e67465f0d9"  #This is your Entra App ID
 $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9" #This is certificate thumbprint
 $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51" #This is your Tenant ID
 $Debug = $false # Set to $True to include debug-level messages in the log file, $False to exclude them
+$maxcount = 150 # The maximum number of users or groups to list in a cell. If exceeded, a summary message is shown to avoid Excel cell limits.
+$ExpandDynamicDLs = $false # Default to expanding dynamic groups. Set to $false to store rule instead of members for dynamic groups.
 
 #Initialize Parameters - Do not change
 $sites = @() # Array to hold site objects to be processed
@@ -198,7 +208,7 @@ Function Get-CachedPnPAzureADUser {
         Write-LogEntry -LogName $LogName -LogEntryText "AAD User '$Identity' found in cache." -LogLevel "DEBUG"
         return $cachedUser # Return cached user object
     }
-     try {
+    try {
         # User not in cache, fetch from API
         Write-LogEntry -LogName $LogName -LogEntryText "Fetching AAD User '$Identity' from API." -LogLevel "DEBUG"
         $upn = $Identity.Split('|')[-1] # Extract UPN
@@ -366,7 +376,8 @@ Function Update-SiteCollectionData {
         [bool] $IsCommunity = $false,
         [bool] $AllowMembersEditMembership = $false,
         [bool] $MembersCanShare = $false,
-        [bool] $ContainsSubSites = $false
+        [bool] $ContainsSubSites = $false,
+        [string] $EntraGroupMembershipRule = "" # New parameter for dynamic group rule
     )
 
     # Initialize the site's data structure if it doesn't exist
@@ -404,6 +415,7 @@ Function Update-SiteCollectionData {
             "SP Users"                       = [System.Collections.Generic.List[PSObject]]::new() 
             "Entra Group Owners"             = [System.Collections.Generic.List[PSObject]]::new() 
             "Entra Group Members"            = [System.Collections.Generic.List[PSObject]]::new() 
+            "Entra Group Membership Rule"    = "" # New field for dynamic group rule
             "Entra Group Details"            = $null
             "Site Collection Admins"         = [System.Collections.Generic.List[PSObject]]::new() 
             "Site Level Users"               = [System.Collections.Generic.List[PSObject]]::new() 
@@ -420,6 +432,7 @@ Function Update-SiteCollectionData {
     if ($MajorVersionLimit -ge 0) { $siteCollectionData[$SiteUrl]["MajorVersionLimit"] = $MajorVersionLimit } # -1 indicates not set
     if ($PSBoundParameters.ContainsKey('AllowMembersEditMembership')) { $siteCollectionData[$SiteUrl]["AllowMembersEditMembership"] = $AllowMembersEditMembership }
     if ($PSBoundParameters.ContainsKey('MembersCanShare')) { $siteCollectionData[$SiteUrl]["MembersCanShare"] = $MembersCanShare }
+    if ($PSBoundParameters.ContainsKey('EntraGroupMembershipRule') -and -not [string]::IsNullOrWhiteSpace($EntraGroupMembershipRule)) { $siteCollectionData[$SiteUrl]["Entra Group Membership Rule"] = $EntraGroupMembershipRule }
 
     # Check if the SPGroupName indicates the presence of Sharing Links
     if (-not [string]::IsNullOrWhiteSpace($SPGroupName) -and $SPGroupName -like "SharingLinks*") {
@@ -507,8 +520,8 @@ $processedCount = 0 # Counter for processed sites
 $csvHeaders = "URL,Owner,IB Mode,IB Segment,Group ID,RelatedGroupId,IsHubSite,Template,SiteDefinedSharingCapability," + 
 "SharingCapability,DisableCompanyWideSharingLinks,AllowMembersEditMembership,MembersCanShare,Custom Script Allowed,IsTeamsConnected,IsTeamsChannelConnected," + 
 "TeamsChannelType,StorageQuota (MB),StorageUsageCurrent (MB),LockState,LastContentModifiedDate,ArchiveState," + 
-"DefaultTrimMode,DefaultExpireAfterDays,MajorVersionLimit,Entra Group DisplayName, Entra Group Alias," + 
-"Entra Group AccessType,Entra Group WhenCreated,Has Sharing Links," + 
+"DefaultTrimMode,DefaultExpireAfterDays,MajorVersionLimit, Entra Group Alias," + 
+"Entra Group AccessType,Entra Group WhenCreated,Has Sharing Links," + # Removed Entra Group Membership Rule
 "EEEU Present,Community Site,Contains SubSites,SP Groups On Site,SP Groups Roles,Site Collection Admins (Name <Email>)," +
 "Site Level Users (Name <Email> [Roles]), SP Users (Group: Name <Email>),Entra Group Owners (Name <Email>),Entra Group Members (Name <Email>)"
 
@@ -521,7 +534,8 @@ Write-LogEntry -LogName $Log -LogEntryText "Created output file with headers: $o
 function Export-SiteCollectionToCSV {
     param(
         [string] $SiteUrl, # URL of the site to export
-        [string] $CsvPath  # Path to the CSV output file
+        [string] $CsvPath,  # Path to the CSV output file
+        [int] $MaxCountForCell # Max items before summarizing
     )
     
     $siteData = $siteCollectionData[$SiteUrl] # Retrieve the collected data for the site
@@ -530,36 +544,105 @@ function Export-SiteCollectionToCSV {
         return
     }
 
-    # Format complex data types (lists of objects) into semicolon-separated strings for CSV
-    $spUsersFormatted = ($siteData."SP Users" | ForEach-Object {
-            $emailStr = if ($_.Email) { $_.Email } else { "N/A" }
-            "$($_.AssociatedSPGroup):$($_.Name) <$emailStr>"
-        }) -join ';'
+    # --- Format complex data types with maxcount check ---
+
+    # SP Users
+    $spUsersList = $siteData."SP Users"
+    $spUsersCount = $spUsersList.Count
+    $spUsersFormatted = ""
+    if ($spUsersCount -gt $MaxCountForCell) {
+        $spUsersFormatted = "max limit reached: $spUsersCount users found"
+    }
+    else {
+        $spUsersFormatted = ($spUsersList | ForEach-Object {
+                $emailStr = if ($_.Email) { $_.Email } else { "N/A" }
+                "$($_.AssociatedSPGroup):$($_.Name) <$emailStr>"
+            }) -join ';'
+    }
   
-    $entraOwnersFormatted = ($siteData."Entra Group Owners" | ForEach-Object {
-            $emailStr = if ($_.Email) { $_.Email } else { "N/A" }
-            "$($_.Name) <$emailStr>"
-        }) -join ';'
+    # Entra Group Owners
+    $entraOwnersList = $siteData."Entra Group Owners"
+    $entraOwnersCount = $entraOwnersList.Count
+    $entraOwnersFormatted = ""
+    if ($entraOwnersCount -gt $MaxCountForCell) {
+        $entraOwnersFormatted = "max limit reached: $entraOwnersCount owners found"
+    }
+    else {
+        $entraOwnersFormatted = ($entraOwnersList | ForEach-Object {
+                $emailStr = if ($_.Email) { $_.Email } else { "N/A" }
+                "$($_.Name) <$emailStr>"
+            }) -join ';'
+    }
 
-    $entraMembersFormatted = ($siteData."Entra Group Members" | ForEach-Object {
-            $emailStr = if ($_.Email) { $_.Email } else { "N/A" }
-            "$($_.Name) <$emailStr>"
-        }) -join ';'
+    # Entra Group Members
+    $entraMembersList = $siteData."Entra Group Members"
+    $entraMembersCount = $entraMembersList.Count
+    $entraMembersFormatted = ""
+    if ($entraMembersCount -eq 0 -and -not [string]::IsNullOrWhiteSpace($siteData."Entra Group Membership Rule")) {
+        # If no members are listed but a rule exists (dynamic group, not expanded)
+        $entraMembersFormatted = "Dynamic Group Rule: $($siteData."Entra Group Membership Rule")"
+    }
+    elseif ($entraMembersCount -gt $MaxCountForCell) {
+        $entraMembersFormatted = "max limit reached: $entraMembersCount members found"
+    }
+    else {
+        $entraMembersFormatted = ($entraMembersList | ForEach-Object {
+                $emailStr = if ($_.Email) { $_.Email } else { "N/A" }
+                "$($_.Name) <$emailStr>"
+            }) -join ';'
+    }
     
-    $siteAdminsFormatted = ($siteData."Site Collection Admins" | ForEach-Object {
-            $emailStr = if ($_.Email) { $_.Email } else { "N/A" }
-            "$($_.Name) <$emailStr>"
-        }) -join ';'
+    # Site Collection Admins
+    $siteAdminsList = $siteData."Site Collection Admins"
+    $siteAdminsCount = $siteAdminsList.Count
+    $siteAdminsFormatted = ""
+    if ($siteAdminsCount -gt $MaxCountForCell) {
+        $siteAdminsFormatted = "max limit reached: $siteAdminsCount admins found"
+    }
+    else {
+        $siteAdminsFormatted = ($siteAdminsList | ForEach-Object {
+                $emailStr = if ($_.Email) { $_.Email } else { "N/A" }
+                "$($_.Name) <$emailStr>"
+            }) -join ';'
+    }
     
-    $siteLevelUsersFormatted = ($siteData."Site Level Users" | ForEach-Object {
-            $emailStr = if ($_.Email) { $_.Email } else { "N/A" }
-            "$($_.Name) <$emailStr> [$($_.Roles)]" 
-        }) -join ';'
+    # Site Level Users
+    $siteLevelUsersList = $siteData."Site Level Users"
+    $siteLevelUsersCount = $siteLevelUsersList.Count
+    $siteLevelUsersFormatted = ""
+    if ($siteLevelUsersCount -gt $MaxCountForCell) {
+        $siteLevelUsersFormatted = "max limit reached: $siteLevelUsersCount users/groups found"
+    }
+    else {
+        $siteLevelUsersFormatted = ($siteLevelUsersList | ForEach-Object {
+                $emailStr = if ($_.Email) { $_.Email } else { "N/A" }
+                "$($_.Name) <$emailStr> [$($_.Roles)]" 
+            }) -join ';'
+    }
     
-    $spGroupRolesFormatted = ($siteData."SP Group Roles Per Group".GetEnumerator() | ForEach-Object {
-            "$($_.Key): [$($_.Value)]" # Format as "GroupName: [Role1,Role2]"
-        }) -join ';'
-
+    # SP Group Roles
+    $spGroupRolesDict = $siteData."SP Group Roles Per Group"
+    $spGroupRolesCount = $spGroupRolesDict.Keys.Count
+    $spGroupRolesFormatted = ""
+    if ($spGroupRolesCount -gt $MaxCountForCell) {
+        $spGroupRolesFormatted = "max limit reached: $spGroupRolesCount groups with roles found"
+    }
+    else {
+        $spGroupRolesFormatted = ($spGroupRolesDict.GetEnumerator() | ForEach-Object {
+                "$($_.Key): [$($_.Value)]" # Format as "GroupName: [Role1,Role2]"
+            }) -join ';'
+    }
+    
+    # SP Groups On Site
+    $spGroupsList = $siteData."SP Groups On Site"
+    $spGroupsCount = $spGroupsList.Count
+    $spGroupsOnSiteFormatted = ""
+    if ($spGroupsCount -gt $MaxCountForCell) {
+        $spGroupsOnSiteFormatted = "max limit reached: $spGroupsCount groups found"
+    }
+    else {
+        $spGroupsOnSiteFormatted = ($spGroupsList -join ';')
+    }
 
     # Create a PSCustomObject with all properties matching the CSV headers
     $exportItem = [PSCustomObject]@{
@@ -586,17 +669,17 @@ function Export-SiteCollectionToCSV {
         DefaultTrimMode                           = $siteData.DefaultTrimMode
         DefaultExpireAfterDays                    = if ($siteData.DefaultExpireAfterDays -eq -1) { "NotSet" } else { $siteData.DefaultExpireAfterDays }
         MajorVersionLimit                         = if ($siteData.MajorVersionLimit -eq -1) { "NotSet" } else { $siteData.MajorVersionLimit }
-        "Entra Group DisplayName"                 = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".DisplayName } else { $null } 
         "Entra Group Alias"                       = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".Alias } else { $null }
         "Entra Group AccessType"                  = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".AccessType } else { $null }
         "Entra Group WhenCreated"                 = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".WhenCreated } else { $null }
+        # "Entra Group Membership Rule" property removed from exportItem as it's now part of Entra Group Members column
         "Has Sharing Links"                       = if ($siteData."Has Sharing Links") { "True" } else { "False" }
         "EEEU Present"                            = if ($siteData."EEEU Present") { "True" } else { "False" } 
         "Community Site"                          = if ($siteData."Community Site") { "True" } else { "False" }
         "Contains SubSites"                       = if ($siteData."Contains SubSites") { "True" } else { "False" }
         "AllowMembersEditMembership"              = if ($siteData."AllowMembersEditMembership") { "True" } else { "False" }
         "MembersCanShare"                         = if ($siteData."MembersCanShare") { "True" } else { "False" }
-        "SP Groups On Site"                       = ($siteData."SP Groups On Site" -join ';')
+        "SP Groups On Site"                       = $spGroupsOnSiteFormatted
         "SP Groups Roles"                         = $spGroupRolesFormatted 
         "Site Collection Admins (Name <Email>)"   = $siteAdminsFormatted
         "SP Users (Group: Name <Email>)"          = $spUsersFormatted       
@@ -813,22 +896,44 @@ foreach ($site in $sites) {
                 try {
                     # Get M365 Group details
                     $aadGroup = Invoke-PnPWithRetry -ScriptBlock { Get-PnPMicrosoft365Group -Identity $siteprops.GroupId } -Operation "Get-PnPMicrosoft365Group for $($siteprops.GroupId)" -LogName $Log
-                    if ($aadGroup) { Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -AADGroups $aadGroup }
+                    if ($aadGroup) { 
+                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -AADGroups $aadGroup 
 
-                    # Get M365 Group Owners
-                    $groupOwners = Invoke-PnPWithRetry -ScriptBlock { Get-PnPMicrosoft365GroupOwners -Identity $siteprops.GroupId } -Operation "Get M365 Group Owners for $($siteprops.GroupId)" -LogName $Log
-                    foreach ($owner in $groupOwners) {
-                        # Use UPN if available, otherwise use ID for AAD lookup
-                        $ownerIdentity = if (-not [string]::IsNullOrWhiteSpace($owner.UserPrincipalName)) { $owner.UserPrincipalName } else { $owner.Id }
-                        $aadOwnerUser = Get-CachedPnPAzureADUser -Identity $ownerIdentity -LogName $Log
-                        if ($aadOwnerUser) { Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -EntraGroupOwner $aadOwnerUser.DisplayName -EntraGroupOwnerEmail $aadOwnerUser.Mail }
-                    }
-                    # Get M365 Group Members
-                    $groupMembers = Invoke-PnPWithRetry -ScriptBlock { Get-PnPMicrosoft365GroupMembers -Identity $siteprops.GroupId } -Operation "Get M365 Group Members for $($siteprops.GroupId)" -LogName $Log
-                    foreach ($member in $groupMembers) {
-                        $memberIdentity = if (-not [string]::IsNullOrWhiteSpace($member.UserPrincipalName)) { $member.UserPrincipalName } else { $member.Id }
-                        $aadMemberUser = Get-CachedPnPAzureADUser -Identity $memberIdentity -LogName $Log
-                        if ($aadMemberUser) { Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -EntraGroupMember $aadMemberUser.DisplayName -EntraGroupMemberEmail $aadMemberUser.Mail }
+                        $isDynamicGroup = $false
+                        # Check if the group is dynamic and store its rule
+                        if ($null -ne $aadGroup.MembershipRule) {
+                            $isDynamicGroup = $true
+                            Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -EntraGroupMembershipRule $aadGroup.MembershipRule
+                            Write-LogEntry -LogName $Log -LogEntryText "Group $($siteprops.GroupId) is dynamic. Rule: $($aadGroup.MembershipRule)" -LogLevel "INFO"
+                        }
+
+                        # Get M365 Group Owners (always retrieve owners)
+                        $groupOwners = Invoke-PnPWithRetry -ScriptBlock { Get-PnPMicrosoft365GroupOwners -Identity $siteprops.GroupId } -Operation "Get M365 Group Owners for $($siteprops.GroupId)" -LogName $Log
+                        foreach ($owner in $groupOwners) {
+                            # Use UPN if available, otherwise use ID for AAD lookup
+                            $ownerIdentity = if (-not [string]::IsNullOrWhiteSpace($owner.UserPrincipalName)) { $owner.UserPrincipalName } else { $owner.Id }
+                            $aadOwnerUser = Get-CachedPnPAzureADUser -Identity $ownerIdentity -LogName $Log
+                            if ($aadOwnerUser) { Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -EntraGroupOwner $aadOwnerUser.DisplayName -EntraGroupOwnerEmail $aadOwnerUser.Mail }
+                        }
+
+                        # Get M365 Group Members conditionally
+                        if (-not $isDynamicGroup -or $ExpandDynamicDLs) {
+                            if ($isDynamicGroup -and $ExpandDynamicDLs) {
+                                Write-LogEntry -LogName $Log -LogEntryText "Expanding dynamic group $($siteprops.GroupId) members as per ExpandDynamicDLs setting." -LogLevel "INFO"
+                            }
+                            
+                            $groupMembers = Invoke-PnPWithRetry -ScriptBlock { Get-PnPMicrosoft365GroupMembers -Identity $siteprops.GroupId } -Operation "Get M365 Group Members for $($siteprops.GroupId)" -LogName $Log
+                            foreach ($member in $groupMembers) {
+                                $memberIdentity = if (-not [string]::IsNullOrWhiteSpace($member.UserPrincipalName)) { $member.UserPrincipalName } else { $member.Id }
+                                $aadMemberUser = Get-CachedPnPAzureADUser -Identity $memberIdentity -LogName $Log
+                                if ($aadMemberUser) { Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -EntraGroupMember $aadMemberUser.DisplayName -EntraGroupMemberEmail $aadMemberUser.Mail }
+                            }
+                        }
+                        else {
+                            # Is dynamic group AND ExpandDynamicDLs is $false
+                            Write-LogEntry -LogName $Log -LogEntryText "Skipping member expansion for dynamic group $($siteprops.GroupId) as per ExpandDynamicDLs setting. Membership rule already stored." -LogLevel "INFO"
+                            # Entra Group Members list will remain empty for this site if not expanded; rule is in its own field.
+                        }
                     }
                 }
                 catch { Write-LogEntry -LogName $Log -LogEntryText "Warning: Could not retrieve M365 group info for $($siteprops.GroupId) on $siteUrl : $_" -LogLevel "WARNING" }
@@ -961,7 +1066,7 @@ foreach ($site in $sites) {
     }
     
     # Export the collected data for the current site to CSV and remove from memory
-    Export-SiteCollectionToCSV -SiteUrl $siteUrl -CsvPath $outputfile
+    Export-SiteCollectionToCSV -SiteUrl $siteUrl -CsvPath $outputfile -MaxCountForCell $maxcount
     Write-Host "Exported data for site $processedCount/$totalSites to CSV" -ForegroundColor Green
 
 } # End foreach Site
