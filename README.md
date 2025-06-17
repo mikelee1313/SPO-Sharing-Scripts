@@ -34,8 +34,8 @@ This repository provides PowerShell scripts for Microsoft 365 administrators to 
   Scans for and removes sharing links from SPO items to tighten security.
 
 - [get-allgroups](https://github.com/mikelee1313/SPO-Sharing-Scripts/blob/main/get-allgroups)  
-  A script or to enumerate all groups in SPO or related context.
-
+  A script or to enumerate all groups in Entra AD
+  
 ## Documentation
 
 Some scripts have additional documentation:
