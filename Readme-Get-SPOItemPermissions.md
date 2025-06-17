@@ -126,4 +126,3 @@ Make sure to update configuration variables in the script before running.
 
 ---
 
-Let me know if you want this README tailored for the whole repo or just this script!
