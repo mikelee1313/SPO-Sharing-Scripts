@@ -63,8 +63,8 @@ $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"                # This is your T
 $inputFilePath = 'C:\temp\SPOSiteList.txt' # Path to the input file containing site URLs
 
 # --- Script Behavior Settings ---
-$batchSize = 10  # How many items to process before writing to Excel
-$maxItemsPerSheet = 10 # Maximum items per sheet in Excel
+$batchSize = 100  # How many items to process before writing to Excel
+$maxItemsPerSheet = 5000 # Maximum items per sheet in Excel
 
 # =================================================================================================
 # END OF USER CONFIGURATION
