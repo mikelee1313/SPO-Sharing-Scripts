@@ -88,6 +88,13 @@ $maxItemsPerSheet = 5000
 - **Summary:** Optionally, a summary worksheet lists total items processed, number of sites, unique permissions, and duration.
 - **Log File:** Tracks all actions, errors, and warnings for troubleshooting.
 
+ ![image](https://github.com/user-attachments/assets/9f6b0a64-bb36-45d0-b384-20acbefc9d4a)
+
+ ![image](https://github.com/user-attachments/assets/f7be3d95-cef8-4dbc-a3f7-df0e5331425e)
+
+ ![image](https://github.com/user-attachments/assets/d87b7cdb-7092-4358-8fb3-0f1fee6fda57)
+
+
 ---
 
 ## Notes
