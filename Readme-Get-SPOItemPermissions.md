@@ -57,8 +57,8 @@ $tenant = "your-tenant-id"              # Tenant ID
 $inputFilePath = 'C:\temp\SPOSiteList.txt'  # Path to site URLs file
 
 # --- Script Behavior Settings (optional) ---
-$batchSize = 10
-$maxItemsPerSheet = 10
+$batchSize = 100
+$maxItemsPerSheet = 5000
 ```
 
 ---
