@@ -1,7 +1,3 @@
-Here is a draft README for your repository, summarizing the scripts found in the root directory. Note: This list may be incomplete due to API limits. To see all files, visit the repo’s file browser: https://github.com/mikelee1313/SPO-Sharing-Scripts/tree/main/
-
----
-
 # SPO-Sharing-Scripts
 
 Used to locate Sharing links and users with access across SharePoint Online / OneDrive Sites.
@@ -59,5 +55,3 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 For more scripts and details, view the full directory:  
 https://github.com/mikelee1313/SPO-Sharing-Scripts/tree/main/
-
-If you’d like detailed usage or summary for a specific script, let me know!
