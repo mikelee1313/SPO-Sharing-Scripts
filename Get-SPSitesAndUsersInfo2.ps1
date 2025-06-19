@@ -37,7 +37,7 @@
     File Name      : Get-SPSitesAndUsersInfo2.ps1
     Author         : Mike Lee / Andrew Thompson
     Prerequisite   : PnP.PowerShell module installed
-    Date           : 6/10/25     
+    Date           : 6/19/25     
     Version        : 2.1
 
     Requirements:
@@ -247,7 +247,7 @@ Function Set-EEEUPresentIfApplicable {
     
     # If no roles are provided, EEEU doesn't have permissions through this context
     if ($null -eq $Roles -or $Roles.Count -eq 0) {
-        Write-LogEntry -LogName $Log -LogEntryText "Set-EEEUPresentIfApplicable: No roles provided for EEEU via $ContextForLog on site $SiteUrlToUpdate. No change to 'EEEU Present'." -LogLevel "DEBUG"
+        Write-LogEntry -LogName $Log -LogEntryText "Set-EEEUPresentIfApplicable: No roles provided for EEEU via $ContextForLog on site $SiteUrlToUpdate. No change to 'EEEU Count'." -LogLevel "DEBUG"
         return
     }
 
@@ -263,22 +263,20 @@ Function Set-EEEUPresentIfApplicable {
         }
     }
 
-    # If EEEU has any permission and it's not just "Limited Access", mark 'EEEU Present' as true
+    # If EEEU has any permission and it's not just "Limited Access", increment 'EEEU Count'
     if ($hasAnyPermission -and -not $hasOnlyLimitedAccess) {
-        Write-LogEntry -LogName $Log -LogEntryText "EEEU has meaningful permissions ($($Roles -join ',')) via $ContextForLog. Setting 'EEEU Present' to TRUE for site $SiteUrlToUpdate" -LogLevel "INFO"
+        Write-LogEntry -LogName $Log -LogEntryText "EEEU has meaningful permissions ($($Roles -join ',')) via $ContextForLog. Incrementing 'EEEU Count' for site $SiteUrlToUpdate" -LogLevel "INFO"
         if ($siteCollectionData.ContainsKey($SiteUrlToUpdate)) {
-            # Only set to true. If already true from another context, no change needed.
-            if (-not $siteCollectionData[$SiteUrlToUpdate]["EEEU Present"]) {
-                $siteCollectionData[$SiteUrlToUpdate]["EEEU Present"] = $true
-            }
+            # Increment the EEEU count
+            $siteCollectionData[$SiteUrlToUpdate]["EEEU Count"]++
         }
         else {
-            Write-LogEntry -LogName $Log -LogEntryText "Set-EEEUPresentIfApplicable: Site $SiteUrlToUpdate not found in siteCollectionData. Cannot set 'EEEU Present'." -LogLevel "WARNING"
+            Write-LogEntry -LogName $Log -LogEntryText "Set-EEEUPresentIfApplicable: Site $SiteUrlToUpdate not found in siteCollectionData. Cannot increment 'EEEU Count'." -LogLevel "WARNING"
         }
     }
     else {
         # EEEU has no roles or only "Limited Access"
-        Write-LogEntry -LogName $Log -LogEntryText "Set-EEEUPresentIfApplicable: EEEU via $ContextForLog on site $SiteUrlToUpdate has no roles or only 'Limited Access' ($($Roles -join ',')). 'EEEU Present' remains unchanged (currently $($siteCollectionData[$SiteUrlToUpdate]['EEEU Present']))." -LogLevel "DEBUG"
+        Write-LogEntry -LogName $Log -LogEntryText "Set-EEEUPresentIfApplicable: EEEU via $ContextForLog on site $SiteUrlToUpdate has no roles or only 'Limited Access' ($($Roles -join ',')). 'EEEU Count' remains unchanged (currently $($siteCollectionData[$SiteUrlToUpdate]['EEEU Count']))." -LogLevel "DEBUG"
     }
 }
 
@@ -419,8 +417,8 @@ Function Update-SiteCollectionData {
             "Entra Group Details"            = $null
             "Site Collection Admins"         = [System.Collections.Generic.List[PSObject]]::new() 
             "Site Level Users"               = [System.Collections.Generic.List[PSObject]]::new() 
-            "Has Sharing Links"              = $false 
-            "EEEU Present"                   = $false 
+            "Sharing Links Count"            = 0  # Count of sharing links found on the site
+            "EEEU Count"                     = 0  # Count of EEEU present on the site
         }
     }
     
@@ -436,7 +434,7 @@ Function Update-SiteCollectionData {
 
     # Check if the SPGroupName indicates the presence of Sharing Links
     if (-not [string]::IsNullOrWhiteSpace($SPGroupName) -and $SPGroupName -like "SharingLinks*") {
-        $siteCollectionData[$SiteUrl]["Has Sharing Links"] = $true
+        $siteCollectionData[$SiteUrl]["Sharing Links Count"]++
     }
 
     # Add Site Collection Administrator if provided and not already present
@@ -521,8 +519,8 @@ $csvHeaders = "URL,Owner,IB Mode,IB Segment,Group ID,RelatedGroupId,IsHubSite,Te
 "SharingCapability,DisableCompanyWideSharingLinks,AllowMembersEditMembership,MembersCanShare,Custom Script Allowed,IsTeamsConnected,IsTeamsChannelConnected," + 
 "TeamsChannelType,StorageQuota (MB),StorageUsageCurrent (MB),LockState,LastContentModifiedDate,ArchiveState," + 
 "DefaultTrimMode,DefaultExpireAfterDays,MajorVersionLimit, Entra Group Alias," + 
-"Entra Group AccessType,Entra Group WhenCreated,Has Sharing Links," + # Removed Entra Group Membership Rule
-"EEEU Present,Community Site,Contains SubSites,SP Groups On Site,SP Groups Roles,Site Collection Admins (Name <Email>)," +
+"Entra Group AccessType,Entra Group WhenCreated,Sharing Links Count," + 
+"EEEU Count,Community Site,Contains SubSites,SP Groups On Site,SP Groups Roles,Site Collection Admins (Name <Email>)," +
 "Site Level Users (Name <Email> [Roles]), SP Users (Group: Name <Email>),Entra Group Owners (Name <Email>),Entra Group Members (Name <Email>)"
 
 # Create the output CSV file and write the headers
@@ -672,9 +670,8 @@ function Export-SiteCollectionToCSV {
         "Entra Group Alias"                       = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".Alias } else { $null }
         "Entra Group AccessType"                  = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".AccessType } else { $null }
         "Entra Group WhenCreated"                 = if ($siteData."Entra Group Details") { $siteData."Entra Group Details".WhenCreated } else { $null }
-        # "Entra Group Membership Rule" property removed from exportItem as it's now part of Entra Group Members column
-        "Has Sharing Links"                       = if ($siteData."Has Sharing Links") { "True" } else { "False" }
-        "EEEU Present"                            = if ($siteData."EEEU Present") { "True" } else { "False" } 
+        "Sharing Links Count"                     = $siteData."Sharing Links Count"
+        "EEEU Count"                              = $siteData."EEEU Count"
         "Community Site"                          = if ($siteData."Community Site") { "True" } else { "False" }
         "Contains SubSites"                       = if ($siteData."Contains SubSites") { "True" } else { "False" }
         "AllowMembersEditMembership"              = if ($siteData."AllowMembersEditMembership") { "True" } else { "False" }
@@ -949,7 +946,7 @@ foreach ($site in $sites) {
                     }
                     $spGroupName = $spGroup.Title; $spGroupRolesString = "" # Initialize roles string
                     
-                    # Check for SharingLinks groups to mark "Has Sharing Links"
+                    # Check for SharingLinks groups to increment "Sharing Links Count"
                     if ($spGroupName -like "SharingLinks*") { 
                         Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -SPGroupName $spGroupName
                     }
