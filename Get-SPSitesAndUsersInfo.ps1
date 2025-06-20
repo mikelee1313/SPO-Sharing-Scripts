@@ -34,7 +34,7 @@
     Set to $false to list the membership rule instead of members for dynamic groups. Default is $false.
 
 .NOTES
-    File Name      : Get-SPSitesAndUsersInfo2.ps1
+    File Name      : Get-SPSitesAndUsersInfo.ps1
     Author         : Mike Lee / Andrew Thompson
     Prerequisite   : PnP.PowerShell module installed
     Date           : 6/19/25     
@@ -68,7 +68,7 @@
     $tenant = "87654321-4321-4321-4321-ba0987654321"
     $inputfile = "C:\temp\sitelist-contoso.csv"
     $maxcount = 150
-    .\Get-SPSitesAndUsersInfo2.ps1
+    .\Get-SPSitesAndUsersInfo.ps1
 #>
 
 # Set Variables
