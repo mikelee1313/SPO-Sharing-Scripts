@@ -22,7 +22,7 @@
 .NOTES
     File Name      : Get-SPOItemPermissions.ps1
     Author         : Mike Lee
-    Date Created   : 6/17/2025
+    Date Created   : 6/24/2025
 
     The script uses app-only authentication with a certificate thumbprint. Make sure the app has
     proper permissions in your tenant (Sites.FullControl.All is recommended).
@@ -436,7 +436,17 @@ function Get-SPItemPermission {
                     $principalEmail = "N/A"
                 }
                 
-                $assignedRoles = $RoleAssignment.RoleDefinitionBindings | ForEach-Object { $_.Name }
+                # Filter out "Limited" permissions
+                $assignedRoles = $RoleAssignment.RoleDefinitionBindings | 
+                Where-Object { $_.Name -ne "Limited Access" } | 
+                ForEach-Object { $_.Name }
+                
+                # Skip this principal if they only have Limited Access
+                if ($assignedRoles.Count -eq 0) {
+                    Write-Log "Skipping 'Limited Access' permission for $principalDisplayName on $itemPath" "INFO"
+                    continue
+                }
+                
                 $assignedRolesStr = $assignedRoles -join ", "
                 
                 [void]($allPrincipals += $principalDisplayName)
