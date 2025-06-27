@@ -20,9 +20,6 @@ This repository provides PowerShell scripts for Microsoft 365 administrators to 
 - [Get-SPSitesAndUsersInfo.ps1](https://github.com/mikelee1313/SPO-Sharing-Scripts/blob/main/Get-SPSitesAndUsersInfo.ps1)  
   Enumerates all SPO sites and lists users who have access, including sharing details.
 
-- [Get-SPSitesAndUsersInfo2.ps1](https://github.com/mikelee1313/SPO-Sharing-Scripts/blob/main/Get-SPSitesAndUsersInfo2.ps1)  
-  Alternative or enhanced version of the above, with potentially different output or method.
-
 - [Get-SPSitesAndUsersInfo-ImportExcel.ps1](https://github.com/mikelee1313/SPO-Sharing-Scripts/blob/main/Get-SPSitesAndUsersInfo-ImportExcel.ps1)  
   Similar to the above, but outputs results directly to Excel for easier reporting.
 
