@@ -55,7 +55,7 @@
     Authors: Mike Lee
     Date: 7/1/2025
 
-    - Requires PnP.PowerShell module
+    - Requires PnP.PowerShell 3.x module
     - Requires an Entra app registration with appropriate SharePoint permissions
     - Requires a certificate for authentication
     - The app must have Sites.FullControl.All and User.Read.All permissions
@@ -73,7 +73,7 @@
 
 .EXAMPLE
     # Process all sites, only inventory sharing links without modifications (report mode)
-    .\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
+    .\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
 
 .EXAMPLE
     # Process sites from a simple CSV file with URLs and convert Organization links to direct permissions
@@ -84,18 +84,18 @@
     $inputfile = "C:\temp\sitelist.csv"
     $convertOrganizationLinks = $true
     # Note: $cleanupCorruptedSharingGroups will automatically be set to $true in remediation mode
-    .\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
+    .\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
 
 .EXAMPLE
     # Two-step process: Report then Remediate
     # Step 1: Run in report mode to generate CSV output
     $convertOrganizationLinks = $false
-    .\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
+    .\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
     
     # Step 2: Use the generated CSV to remediate only Organization links
     $inputfile = "C:\temp\SPO_SharingLinks_2025-07-01_14-30-15.csv"
     # Note: $convertOrganizationLinks will be automatically set to $true when using script's CSV output
-    .\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
+    .\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
 #>
 
 
