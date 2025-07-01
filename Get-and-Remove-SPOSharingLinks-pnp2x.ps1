@@ -81,7 +81,7 @@
     $appID = "12345678-1234-1234-1234-1234567890ab"
     $thumbprint = "1234567890ABCDEF1234567890ABCDEF12345678"
     $tenant = "12345678-1234-1234-1234-1234567890ab"
-    $inputfile = "C:\temp\sitelist.csv"
+    $inputfile = $null
     $convertOrganizationLinks = $false
     # Note: $cleanupCorruptedSharingGroups will automatically be set to $true in remediation mode
     .\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
