@@ -55,7 +55,7 @@
     Authors: Mike Lee
     Date: 7/1/2025
 
-    - Requires PnP.PowerShell module
+    - Requires PnP.PowerShell 2.x module
     - Requires an Entra app registration with appropriate SharePoint permissions
     - Requires a certificate for authentication
     - The app must have Sites.FullControl.All and User.Read.All permissions
