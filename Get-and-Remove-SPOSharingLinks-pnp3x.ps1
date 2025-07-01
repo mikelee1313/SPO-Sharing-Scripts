@@ -111,6 +111,14 @@ $convertOrganizationLinks = $false                              # Set to $false 
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
+# Initialize Parameters - Do not change
+# ----------------------------------------------
+$sites = @()
+$inputfile = $null
+$log = $null
+$date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+
+# ----------------------------------------------
 # Input / Output and Log Files
 # ----------------------------------------------
 $inputfile = $null #comment this line to run against all SPO Sites, otherwise use an input file.
@@ -169,18 +177,13 @@ Function Write-ErrorLog {
 }
 
 # ----------------------------------------------
-# Initialize Parameters - Do not change
+# Smart Switch for auto cleanupCorruptedSharingGroups
 # ----------------------------------------------
-$sites = @()
-$cleanupCorruptedSharingGroups = $false                         # Set to $false to skip cleanup of empty/corrupted sharing groups (Note: automatically enabled in remediation mode)
 # Auto-enable cleanup when in remediation mode (converting Organization links)
 if ($convertOrganizationLinks) {
     $cleanupCorruptedSharingGroups = $true
     Write-InfoLog -LogName $Log -LogEntryText "Auto-enabled cleanup of corrupted sharing groups because remediation mode is active"
 }
-$inputfile = $null
-$log = $null
-$date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
 # ----------------------------------------------
 # Connection Parameters
