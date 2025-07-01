@@ -77,7 +77,7 @@
 
 .EXAMPLE
     # Process sites from a simple CSV file with URLs and convert Organization links to direct permissions
-    $tenantname = "contoso"
+    $tenantname = "m365x61250205"
     $appID = "12345678-1234-1234-1234-1234567890ab"
     $thumbprint = "1234567890ABCDEF1234567890ABCDEF12345678"
     $tenant = "12345678-1234-1234-1234-1234567890ab"
