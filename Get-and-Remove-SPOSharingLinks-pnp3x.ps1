@@ -108,7 +108,7 @@ $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certif
 $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"                # This is your Tenant ID
 $searchRegion = "NAM"                                           # Region for Microsoft Graph search
 $convertOrganizationLinks = $false                              # Set to $false ro report only, $true to convert Organization sharing links to direct permissions
-$debugLogging = $true                                           # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
+$debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
 # Initialize Parameters - Do not change
