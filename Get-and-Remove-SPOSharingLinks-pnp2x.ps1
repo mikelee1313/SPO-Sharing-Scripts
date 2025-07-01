@@ -98,7 +98,6 @@
     .\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
 #>
 
-
 # ----------------------------------------------
 # Set Variables
 # ----------------------------------------------
@@ -109,6 +108,14 @@ $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"                # This is your T
 $searchRegion = "NAM"                                           # Region for Microsoft Graph search
 $convertOrganizationLinks = $false                              # Set to $false ro report only, $true to convert Organization sharing links to direct permissions
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
+
+# ----------------------------------------------
+# Initialize Parameters - Do not change
+# ----------------------------------------------
+$sites = @()
+$inputfile = $null
+$log = $null
+$date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
 # ----------------------------------------------
 # Input / Output and Log Files
@@ -169,18 +176,13 @@ Function Write-ErrorLog {
 }
 
 # ----------------------------------------------
-# Initialize Parameters - Do not change
+# Smart Switch for auto cleanupCorruptedSharingGroups
 # ----------------------------------------------
-$sites = @()
-$cleanupCorruptedSharingGroups = $false                         # Set to $false to skip cleanup of empty/corrupted sharing groups (Note: automatically enabled in remediation mode)
 # Auto-enable cleanup when in remediation mode (converting Organization links)
 if ($convertOrganizationLinks) {
     $cleanupCorruptedSharingGroups = $true
     Write-InfoLog -LogName $Log -LogEntryText "Auto-enabled cleanup of corrupted sharing groups because remediation mode is active"
 }
-$inputfile = $null
-$log = $null
-$date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
 
 # ----------------------------------------------
