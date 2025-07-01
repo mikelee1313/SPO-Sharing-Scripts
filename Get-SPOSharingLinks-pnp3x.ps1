@@ -13,9 +13,9 @@
 .NOTES
     File Name      : Get-SPOSharingLinks-pnp3x.ps1
     Author         : Mike Lee
-    Date Created   : 5/27/25
+    Date Created   : 7/1/25
     Prerequisite   : 
-    -    PnP PowerShell module (Tested with PNP 3.1.0)
+    -    PnP PowerShell module (Tested with PNP 3.x)
     -    Microsoft Graph API permissions for app-only authentication
             Graph: Files.Read.All (Application)
             SharePoint: Sites.FullControl.All (Application) 
@@ -32,8 +32,8 @@
     to use the sample scripts or documentation, even if Microsoft has been advised of the possibility of such damages.
 
 .EXAMPLE
-    .\Get-SPOSharingLinks.ps1
-    
+    .\Get-SPOSharingLinks-pnp3x.ps1
+
     Runs the script with the configured parameters to collect SharePoint site sharing information.
 
 .INPUTS
@@ -80,7 +80,6 @@ $searchRegion = "NAM"                                          # Region for Micr
 # Initialize Parameters - Do not change
 # ----------------------------------------------
 $sites = @()
-$output = @()
 $inputfile = $null
 $outputfile = $null
 $log = $null
@@ -89,7 +88,7 @@ $date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 # ----------------------------------------------
 # Input / Output and Log Files
 # ----------------------------------------------
-#$inputfile = 'C:\temp\sitelist.csv' #comment this line to run against all SPO Sites, otherwise use an input file.
+$inputfile = $null #specify a CSV file with site URLs to process specific sites, or leave as $null to process all sites
 $outputfile = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "incremental.csv"
 $log = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "logfile.log"
 # Initialize sharing links output file
@@ -151,7 +150,7 @@ Function Invoke-WithThrottleHandling {
             $waitTime = 10 # Default wait time in seconds
             
             # Check for common throttling status codes
-            if ($_.Exception.Response -ne $null) {
+            if ($null -ne $_.Exception.Response) {
                 $statusCode = [int]$_.Exception.Response.StatusCode
                 
                 if ($statusCode -eq 429 -or $statusCode -eq 503) {
@@ -245,9 +244,12 @@ else {
     Write-LogEntry -LogName $Log -LogEntryText "Getting sites using Get-PnPTenantSite (no input file specified or found)"
     try {
         # Ensure we are connected to Admin Center before this call
-        Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop
         $sites = Invoke-WithThrottleHandling -ScriptBlock {
-            Get-PnPTenantSite
+            Get-PnPTenantSite -IncludeOneDriveSites:$false | Where-Object {
+                $_.Template -notmatch "SRCHCEN|MYSITE|APPCATALOG|PWS|POINTPUBLISHINGTOPIC|SPSMSITEHOST|EHS|REVIEWCTR|TENANTADMIN" -and
+                $_.Status -eq "Active" -and
+                -not [string]::IsNullOrEmpty($_.Url)
+            }
         } -Operation "Get-PnPTenantSite"
         
         Write-Host "Found $($sites.Count) sites." -ForegroundColor Green
@@ -333,7 +335,7 @@ Function Update-SiteCollectionData {
 # ----------------------------------------------
 # Function to process and write sharing links for a site
 # ----------------------------------------------
-Function Process-SiteSharingLinks {
+Function Write-SiteSharingLinks {
     param(
         [Parameter(Mandatory = $true)]
         [string] $SiteUrl,
@@ -600,7 +602,7 @@ foreach ($site in $sites) {
 
             # Process and write sharing links data for this site immediately if any found
             if ($siteCollectionData[$siteUrl]["Has Sharing Links"]) {
-                Process-SiteSharingLinks -SiteUrl $siteUrl -SiteData $siteCollectionData[$siteUrl]
+                Write-SiteSharingLinks -SiteUrl $siteUrl -SiteData $siteCollectionData[$siteUrl]
                 $sitesWithSharingLinksCount++
             }
         }
