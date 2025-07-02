@@ -82,8 +82,10 @@ Get-Module -Name PnP.PowerShell -ListAvailable
 1. **Go to API permissions** → **Add a permission**
 2. **Select Microsoft Graph** → **Application permissions**
 3. **Add these permissions**:
-   - `Sites.FullControl.All`
-   - `User.Read.All`
+- `SharePoint:Sites.FullControl.All`
+- `SharePoint:User.Read.All`
+- `Graph:Sites.FullControl.All`
+- `Graph:Files.Read.All`
 4. **Click "Grant admin consent"**
 
 ### Step 5: Create Certificate
@@ -248,6 +250,7 @@ $inputfile = $null
 - `Sharing Link Members` - Users with access (Name <Email>)
 - `File URL` - Direct link to shared document
 - `File Owner` - Document owner
+- `Sharing Link URL` - Current Sharing Link (to be removed)
 - `IsTeamsConnected` - Whether site is Teams-connected
 - `SharingCapability` - Site sharing settings
 - `Last Content Modified` - When content was last modified
