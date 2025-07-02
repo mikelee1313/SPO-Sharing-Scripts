@@ -43,8 +43,10 @@ The **Get-and-Remove-SPOSharingLinks-pnp2x.ps1** script is a comprehensive Power
 
 ### Permissions Required
 The Entra ID application must have the following **Application permissions**:
-- `Sites.FullControl.All` - Access to all SharePoint sites
-- `User.Read.All` - Read user profiles and group memberships
+- `SharePoint:Sites.FullControl.All` - Access to all SharePoint sites
+- `SharePoint:User.Read.All` - Read user profiles and group memberships
+- `Graph:Sites.FullControl.All` - Access to all SharePoint sites via Graph
+- `Graph:Files.Read.All` - Access to all SharePoint files via Graph
 
 ---
 
