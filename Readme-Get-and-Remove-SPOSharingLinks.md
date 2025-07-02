@@ -2,12 +2,13 @@
 
 ## Overview
 
-The **Get-and-Remove-SPOSharingLinks-pnp2x.ps1** script is a comprehensive PowerShell tool designed to identify, inventory, and remediate SharePoint Online sharing links across your Microsoft 365 tenant. It focuses specifically on **Organization sharing links** and provides a two-step workflow for safe and efficient remediation.
+The **Get-and-Remove-SPOSharingLinks-pnpxx.ps1** script is a comprehensive PowerShell tool designed to identify, inventory, and remediate SharePoint Online sharing links across your Microsoft 365 tenant. It focuses specifically on **Organization sharing links** and provides a two-step workflow for safe and efficient remediation.
 
 ### Key Features
 
 - 🔍 **Complete Inventory**: Scans all SharePoint sites to identify sharing links
 - 🎯 **Targeted Remediation**: Converts Organization sharing links to direct permissions
+- 🔄 **Flexible Link Management**: Option to preserve or remove sharing links after user conversion
 - 🧹 **Automatic Cleanup**: Removes corrupted and empty sharing groups
 - 📊 **Detailed Reporting**: Generates comprehensive CSV reports
 - 🚀 **Two-Step Workflow**: Report first, then remediate based on findings
@@ -34,7 +35,9 @@ The **Get-and-Remove-SPOSharingLinks-pnp2x.ps1** script is a comprehensive Power
 
 ### Required Software
 - **PowerShell 7+**
-- **PnP.PowerShell 2.x module**
+- **PnP.PowerShell module - Note: Use Compatible Version of Script**
+- **Get-and-Remove-SPOSharingLinks-pnp2x.ps1 (PNP2.x)**
+- **Get-and-Remove-SPOSharingLinks-pnp3x.ps1 (PNP3.x)**
 
 ### Microsoft 365 Requirements
 - **SharePoint Online** subscription
@@ -111,7 +114,7 @@ $cert.Thumbprint
 
 ### Edit Script Variables
 
-Open `Get-and-Remove-SPOSharingLinks-pnp2x.ps1` and update these variables:
+Open `Get-and-Remove-SPOSharingLinks-pnpxx.ps1` and update these variables:
 
 ```powershell
 # ----------------------------------------------
@@ -151,7 +154,7 @@ $inputfile = $null                          # Scan all sites
 Note: To run Inventory Mode against a list of sites, populate the $inputfile with your own site list.
 
 # 2. Run the script
-.\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
+.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
 
 # 3. Review the generated CSV file in %TEMP%
 # File name format: SPO_SharingLinks_YYYY-MM-DD_HH-MM-SS.csv
@@ -164,13 +167,30 @@ Note: To run Inventory Mode against a list of sites, populate the $inputfile wit
 $inputfile = "C:\Temp\SPO_SharingLinks_2025-07-01_14-30-15.csv"
 
 # 2. Run the script (it will auto-enable remediation for Organization links)
-.\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
+.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
 
 # Note: The script automatically:
 # - Detects its own CSV format
 # - Filters for Organization sharing links only
 # - Enables remediation mode ($convertOrganizationLinks = $true)
+# - By default, removes sharing links ($RemoveSharingLink = $true)
 # - Enables cleanup mode ($cleanupCorruptedSharingGroups = $true)
+```
+
+#### **Step 3: Remediate While Preserving Sharing Links (Optional)**
+
+```powershell
+# If you want to convert users to direct permissions but KEEP the sharing links:
+$inputfile = "C:\Temp\SPO_SharingLinks_2025-07-01_14-30-15.csv"
+$RemoveSharingLink = $false  # This preserves the sharing links
+
+# Run the script
+.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
+
+# Note: With $RemoveSharingLink = $false:
+# - Users are still converted to direct permissions
+# - Sharing links remain intact and functional
+# - Corrupted sharing groups are NOT cleaned up
 ```
 
 ### 📊 Alternative Workflows
@@ -196,7 +216,7 @@ $convertOrganizationLinks = $true
 # ⚠️ WARNING: This processes ALL sites immediately
 $convertOrganizationLinks = $true
 $inputfile = $null
-.\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
+.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
 ```
 
 ---
@@ -217,12 +237,13 @@ $inputfile = $null
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `$convertOrganizationLinks` | Boolean | `$false` | Enable remediation mode |
+| `$RemoveSharingLink` | Boolean | `$true` | When `$true`, removes sharing links after converting users. When `$false`, preserves sharing links while still converting users to direct permissions. |
 | `$cleanupCorruptedSharingGroups` | Boolean | `$false`* | Clean up empty sharing groups |
 | `$debugLogging` | Boolean | `$true` | Enable detailed logging |
 | `$inputfile` | String | `$null` | Path to input CSV file |
 | `$searchRegion` | String | `"NAM"` | Microsoft Graph search region |
 
-*Automatically set to `$true` when `$convertOrganizationLinks` is `$true`
+*Automatically set to `$true` when `$convertOrganizationLinks` is `$true` AND `$RemoveSharingLink` is `$true`
 
 ### Region Codes
 
@@ -275,7 +296,7 @@ $inputfile = $null
 # Run monthly report to track sharing links
 $convertOrganizationLinks = $false
 $debugLogging = $false                    # Reduce log verbosity for regular runs
-.\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
+.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
 ```
 
 ### 🔧 Scenario 2: Remediate Specific Sites
@@ -285,10 +306,22 @@ $debugLogging = $false                    # Reduce log verbosity for regular run
 # Then run remediation
 $inputfile = "C:\temp\problematic_sites.csv"
 $convertOrganizationLinks = $true
-.\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
+$RemoveSharingLink = $true  # Default: removes sharing links after user conversion
+.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
 ```
 
-### 📊 Scenario 3: Executive Dashboard Data
+### � Scenario 3: Convert Users but Preserve Sharing Links
+
+```powershell
+# Convert Organization sharing link users to direct permissions
+# But KEEP the sharing links intact
+$convertOrganizationLinks = $true
+$RemoveSharingLink = $false  # Preserves sharing links
+$inputfile = "C:\temp\sites_to_process.csv"
+.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
+```
+
+### �📊 Scenario 4: Executive Dashboard Data
 
 ```powershell
 # Generate data for executive reporting
@@ -429,7 +462,9 @@ Get-ChildItem -Path "Cert:\LocalMachine\My"
 │  4. If remediation mode:                                        │
 │     - Remove users from sharing groups                         │
 │     - Grant direct permissions                                  │
-│     - Remove empty sharing groups                              │
+│     - If $RemoveSharingLink = $true:                            │
+│       * Remove sharing links                                   │
+│       * Clean up empty sharing groups                          │
 │  5. Write data to CSV                                           │
 └─────────────────────────────────────────────────────────────────┘
                                 │
@@ -446,7 +481,8 @@ Get-ChildItem -Path "Cert:\LocalMachine\My"
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2.0 | July 2025 | Complete rewrite with two-step workflow |
+| 2.1 | July 2, 2025 | Added `$RemoveSharingLink` parameter to allow preserving sharing links while converting users |
+| 2.0 | July 1, 2025 | Complete rewrite with two-step workflow |
 | 1.5 | June 2025 | Added automatic cleanup integration |
 | 1.0 | May 2025 | Initial release |
 
@@ -466,6 +502,7 @@ Get-ChildItem -Path "Cert:\LocalMachine\My"
 - ✅ **Always test in non-production first**
 - ✅ **Start with report mode** before remediation
 - ✅ **Review CSV output** before running remediation
+- ✅ **Consider whether to preserve sharing links** by setting `$RemoveSharingLink = $false`
 - ✅ **Backup important data** before making changes
 - ✅ **Run during maintenance windows** for large operations
 - ✅ **Monitor performance** and adjust timing as needed
@@ -486,6 +523,6 @@ This sample script is provided **AS IS** without warranty of any kind. Microsoft
 
 ---
 
-*Last Updated: July 1, 2025*  
-*Script Version: 2.0*  
+*Last Updated: July 2, 2025*  
+*Script Version: 2.1*  
 *Author: Mike Lee*
