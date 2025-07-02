@@ -53,12 +53,16 @@
 
 .NOTES
     Authors: Mike Lee
-    Date: 7/1/2025
+    Date: 7/2/2025
 
     - Requires PnP.PowerShell 3.x module
     - Requires an Entra app registration with appropriate SharePoint permissions
+       - The app must have:
+        - Sharepoint:Sites.FullControl.All
+        - SharePoint:User.Read.All 
+        - Graph:Sites.FullControl.All
+        - Graph:Files.Read.All
     - Requires a certificate for authentication
-    - The app must have Sites.FullControl.All and User.Read.All permissions
     - For optimal performance, use a certificate-based app rather than client secret
 
 .Disclaimer: The sample scripts are provided AS IS without warranty of any kind. 
@@ -98,7 +102,6 @@
     .\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
 #>
 
-
 # ----------------------------------------------
 # Set Variables
 # ----------------------------------------------
@@ -107,7 +110,7 @@ $appID = "5baa1427-1e90-4501-831d-a8e67465f0d9"                 # This is your E
 $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certificate thumbprint
 $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"                # This is your Tenant ID
 $searchRegion = "NAM"                                           # Region for Microsoft Graph search
-$convertOrganizationLinks = $false                              # Set to $false ro report only, $true to convert Organization sharing links to direct permissions
+$convertOrganizationLinks = $false                             # Set to $false for DETECTION mode (report only), $true for REMEDIATION mode (converts Organization sharing links to direct permissions)
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
@@ -121,7 +124,7 @@ $date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 # ----------------------------------------------
 # Input / Output and Log Files
 # ----------------------------------------------
-$inputfile = $null #comment this line to run against all SPO Sites, otherwise use an input file.
+$inputfile = $null #If no input file specified, will process all sites in the tenant
 $log = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "logfile.log"
 # Initialize sharing links output file
 $sharingLinksOutputFile = "$env:TEMP\" + 'SPO_SharingLinks_' + $date + '.csv'
@@ -177,6 +180,13 @@ Function Write-ErrorLog {
 }
 
 # ----------------------------------------------
+# Determine Script Operation Mode
+# ----------------------------------------------
+$scriptMode = if ($convertOrganizationLinks) { "REMEDIATION" } else { "DETECTION" }
+Write-Host "Script is running in $scriptMode mode" -ForegroundColor $(if ($convertOrganizationLinks) { "Yellow" } else { "Cyan" })
+Write-InfoLog -LogName $Log -LogEntryText "Script is running in $scriptMode mode - $(if ($convertOrganizationLinks) { 'Converting Organization links to direct permissions' } else { 'Only detecting and inventorying sharing links, no modifications will be made' })"
+
+# ----------------------------------------------
 # Smart Switch for auto cleanupCorruptedSharingGroups
 # ----------------------------------------------
 # Auto-enable cleanup when in remediation mode (converting Organization links)
@@ -184,6 +194,7 @@ if ($convertOrganizationLinks) {
     $cleanupCorruptedSharingGroups = $true
     Write-InfoLog -LogName $Log -LogEntryText "Auto-enabled cleanup of corrupted sharing groups because remediation mode is active"
 }
+
 
 # ----------------------------------------------
 # Connection Parameters
@@ -390,7 +401,7 @@ $siteCollectionData = @{}
 # ----------------------------------------------
 # Initialize the sharing links output file with headers
 # ----------------------------------------------
-$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,IsTeamsConnected,SharingCapability,Last Content Modified,Link Removed"
+$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,Sharing Link URL,IsTeamsConnected,SharingCapability,Last Content Modified,Link Removed"
 Set-Content -Path $sharingLinksOutputFile -Value $sharingLinksHeaders
 Write-InfoLog -LogName $Log -LogEntryText "Initialized sharing links output file: $sharingLinksOutputFile"
 
@@ -508,9 +519,11 @@ Function Write-SiteSharingLinks {
                 # Get document details if available
                 $documentUrl = "Not found"
                 $documentOwner = "Not found"
+                $sharingLinkUrl = "Not found"
                 if ($SiteData.ContainsKey("DocumentDetails") -and $SiteData["DocumentDetails"].ContainsKey($sharingGroup)) {
                     $documentUrl = $SiteData["DocumentDetails"][$sharingGroup]["DocumentUrl"]
                     $documentOwner = $SiteData["DocumentDetails"][$sharingGroup]["DocumentOwner"]
+                    $sharingLinkUrl = $SiteData["DocumentDetails"][$sharingGroup]["SharingLinkUrl"]
                 }
                 
                 # Get link removal status
@@ -530,6 +543,7 @@ Function Write-SiteSharingLinks {
                     "Sharing Link Members"  = $membersFormatted
                     "File URL"              = $documentUrl
                     "File Owner"            = $documentOwner
+                    "Sharing Link URL"      = $sharingLinkUrl
                     "IsTeamsConnected"      = $SiteData.IsTeamsConnected
                     "SharingCapability"     = $SiteData.SharingCapability
                     "Last Content Modified" = $SiteData.LastContentModifiedDate
@@ -1012,10 +1026,42 @@ Function Convert-OrganizationSharingLinks {
                                     # Get all sharing links for this file using the correct parameter
                                     $sharingLinks = Get-PnPFileSharingLink -Identity $relativePath
                                     
+                                    # Log the structure of the sharing links for debugging
+                                    if ($debugLogging -and $sharingLinks -and $sharingLinks.Count -gt 0) {
+                                        $firstLink = $sharingLinks[0]
+                                        Write-DebugLog -LogName $Log -LogEntryText "Sharing link object properties: $(($firstLink | Get-Member -MemberType Property).Name -join ', ')"
+                                        
+                                        if ($firstLink.link) {
+                                            Write-DebugLog -LogName $Log -LogEntryText "Link property exists. Link properties: $(($firstLink.link | Get-Member -MemberType Property).Name -join ', ')"
+                                            if ($firstLink.link.WebUrl) {
+                                                Write-DebugLog -LogName $Log -LogEntryText "WebUrl found: $($firstLink.link.WebUrl)"
+                                            }
+                                        }
+                                        else {
+                                            Write-DebugLog -LogName $Log -LogEntryText "Link property doesn't exist or is null"
+                                        }
+                                    }
+                                    
                                     foreach ($sharingLink in $sharingLinks) {
                                         # Try to match the sharing link with our group
                                         if ($sharingLink.Id -and $groupName -like "*$($sharingLink.Id)*") {
                                             Write-LogEntry -LogName $Log -LogEntryText "Found matching sharing link with ID: $($sharingLink.Id)" -Level "INFO"
+                                            
+                                            # Store the sharing link URL if we have document details
+                                            if ($siteCollectionData[$SiteUrl].ContainsKey("DocumentDetails") -and 
+                                                $siteCollectionData[$SiteUrl]["DocumentDetails"].ContainsKey($groupName)) {
+                                                
+                                                # Get the WebUrl property of the sharing link from the link property
+                                                $sharingLinkUrl = if ($sharingLink.link -and $sharingLink.link.WebUrl) { 
+                                                    $sharingLink.link.WebUrl 
+                                                }
+                                                else { 
+                                                    "Not found" 
+                                                }
+                                                $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
+                                                
+                                                Write-InfoLog -LogName $Log -LogEntryText "Stored sharing link URL for group $groupName - URL: $sharingLinkUrl"
+                                            }
                                             
                                             # Remove the sharing link using the file URL and sharing link ID
                                             Remove-PnPFileSharingLink -FileUrl $relativePath -Id $sharingLink.Id -Force
@@ -1063,7 +1109,47 @@ Function Convert-OrganizationSharingLinks {
                                             $ctx.ExecuteQuery()
                                             
                                             # Load Microsoft.SharePoint.Client.Sharing namespace
-                                            Add-Type -Path (Get-Module PnP.PowerShell | Select-Object -ExpandProperty ModuleBase | Join-Path -ChildPath "Microsoft.SharePoint.Client.dll")
+                                            # Find the DLL using a more robust approach
+                                            $moduleBase = Get-Module PnP.PowerShell | Select-Object -ExpandProperty ModuleBase
+                                            $dllPath = $null
+                                            
+                                            # Try multiple possible locations
+                                            $possiblePaths = @(
+                                                # Check directly in ModuleBase
+                                                [System.IO.Path]::Combine($moduleBase, "Microsoft.SharePoint.Client.dll"),
+                                                # Check in Core subdirectory (common in PnP.PowerShell structure)
+                                                [System.IO.Path]::Combine($moduleBase, "Core", "Microsoft.SharePoint.Client.dll"),
+                                                # Check in lib subdirectory
+                                                [System.IO.Path]::Combine($moduleBase, "lib", "Microsoft.SharePoint.Client.dll")
+                                            )
+                                            
+                                            # Find the first path that exists
+                                            foreach ($path in $possiblePaths) {
+                                                if (Test-Path $path) {
+                                                    $dllPath = $path
+                                                    Write-DebugLog -LogName $Log -LogEntryText "Found SharePoint Client DLL at: $dllPath"
+                                                    break
+                                                }
+                                            }
+                                            
+                                            # If not found in standard locations, search recursively as a fallback
+                                            if (-not $dllPath) {
+                                                Write-DebugLog -LogName $Log -LogEntryText "Searching recursively for SharePoint Client DLL under $moduleBase"
+                                                $foundFiles = Get-ChildItem -Path $moduleBase -Filter "Microsoft.SharePoint.Client.dll" -Recurse -ErrorAction SilentlyContinue
+                                                if ($foundFiles -and $foundFiles.Count -gt 0) {
+                                                    $dllPath = $foundFiles[0].FullName
+                                                    Write-DebugLog -LogName $Log -LogEntryText "Found SharePoint Client DLL via recursive search at: $dllPath"
+                                                }
+                                            }
+                                            
+                                            # Add the type if found
+                                            if ($dllPath) {
+                                                Add-Type -Path $dllPath
+                                            }
+                                            else {
+                                                Write-ErrorLog -LogName $Log -LogEntryText "Could not find Microsoft.SharePoint.Client.dll in module path: $moduleBase"
+                                                throw "Required SharePoint Client DLL not found"
+                                            }
                                             
                                             # Try to get sharing information and remove it
                                             try {
@@ -1408,12 +1494,153 @@ Function Test-AndParseScriptCsvOutput {
     }
 }
 
+# ----------------------------------------------
+# Function to collect and store sharing link URLs for a site
+# ----------------------------------------------
+Function Get-SharingLinkUrls {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $SiteUrl
+    )
+    
+    Write-Host "  Collecting sharing link URLs for site: $SiteUrl" -ForegroundColor Cyan
+    Write-InfoLog -LogName $Log -LogEntryText "Collecting sharing link URLs for site: $SiteUrl"
+    
+    try {
+        # Connect to the specific site if not already connected
+        $currentConnection = Get-PnPConnection -ErrorAction SilentlyContinue
+        if (-not $currentConnection -or $currentConnection.Url -ne $SiteUrl) {
+            Connect-PnPOnline -Url $SiteUrl @connectionParams -ErrorAction Stop
+        }
+        
+        # Get all SharingLinks groups
+        $sharingGroups = Invoke-WithThrottleHandling -ScriptBlock {
+            Get-PnPGroup | Where-Object { $_.Title -like "SharingLinks*" }
+        } -Operation "Get sharing groups for $SiteUrl"
+        
+        if ($sharingGroups.Count -eq 0) {
+            Write-DebugLog -LogName $Log -LogEntryText "No sharing groups found on site: $SiteUrl"
+            return
+        }
+        
+        Write-Host "    Found $($sharingGroups.Count) sharing groups" -ForegroundColor Green
+        Write-InfoLog -LogName $Log -LogEntryText "Found $($sharingGroups.Count) sharing groups on site: $SiteUrl"
+        
+        foreach ($group in $sharingGroups) {
+            $groupName = $group.Title
+            
+            # Extract document ID from group name
+            $documentId = ""
+            if ($groupName -match "SharingLinks\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.") {
+                $documentId = $matches[1]
+                Write-DebugLog -LogName $Log -LogEntryText "Processing sharing group: $groupName with document ID: $documentId"
+                
+                # Check if we have document details for this group
+                if ($siteCollectionData[$SiteUrl].ContainsKey("DocumentDetails") -and 
+                    $siteCollectionData[$SiteUrl]["DocumentDetails"].ContainsKey($groupName) -and
+                    -not [string]::IsNullOrWhiteSpace($siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["DocumentUrl"])) {
+                    
+                    $docUrl = $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["DocumentUrl"]
+                    
+                    # Get the relative path from the document URL
+                    try {
+                        $uri = [System.Uri]$docUrl
+                        $relativePath = $uri.AbsolutePath
+                        
+                        if (-not [string]::IsNullOrWhiteSpace($relativePath)) {
+                            # Try to get sharing links for this document
+                            try {
+                                $sharingLinks = Invoke-WithThrottleHandling -ScriptBlock {
+                                    Get-PnPFileSharingLink -Identity $relativePath -ErrorAction SilentlyContinue
+                                } -Operation "Get sharing links for document at $relativePath"
+                                
+                                if ($sharingLinks -and $sharingLinks.Count -gt 0) {
+                                    Write-DebugLog -LogName $Log -LogEntryText "Found $($sharingLinks.Count) sharing links for document"
+                                    
+                                    # Log the structure of the first sharing link object to help with debugging
+                                    if ($debugLogging -and $sharingLinks[0]) {
+                                        $firstLink = $sharingLinks[0]
+                                        Write-DebugLog -LogName $Log -LogEntryText "Sharing link object properties: $(($firstLink | Get-Member -MemberType Property).Name -join ', ')"
+                                        
+                                        if ($firstLink.link) {
+                                            Write-DebugLog -LogName $Log -LogEntryText "Link property exists. Link properties: $(($firstLink.link | Get-Member -MemberType Property).Name -join ', ')"
+                                            if ($firstLink.link.WebUrl) {
+                                                Write-DebugLog -LogName $Log -LogEntryText "WebUrl found: $($firstLink.link.WebUrl)"
+                                            }
+                                        }
+                                        else {
+                                            Write-DebugLog -LogName $Log -LogEntryText "Link property doesn't exist or is null"
+                                        }
+                                    }
+                                    
+                                    # Look for a matching sharing link
+                                    $matchingLink = $sharingLinks | Where-Object { $_.Id -and $groupName -like "*$($_.Id)*" } | Select-Object -First 1
+                                    
+                                    if ($matchingLink) {
+                                        # Get the WebUrl property of the sharing link from the link property
+                                        $sharingLinkUrl = if ($matchingLink.link -and $matchingLink.link.WebUrl) { 
+                                            $matchingLink.link.WebUrl 
+                                        }
+                                        else { 
+                                            "Not found" 
+                                        }
+                                        $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
+                                        
+                                        Write-Host "      Found sharing link URL for group: $groupName" -ForegroundColor Green
+                                        Write-InfoLog -LogName $Log -LogEntryText "Found sharing link URL for group $groupName - URL: $sharingLinkUrl"
+                                    }
+                                    else {
+                                        Write-DebugLog -LogName $Log -LogEntryText "No matching sharing link found for group: $groupName"
+                                    }
+                                }
+                                else {
+                                    Write-DebugLog -LogName $Log -LogEntryText "No sharing links found for document at: $relativePath"
+                                }
+                            }
+                            catch {
+                                Write-DebugLog -LogName $Log -LogEntryText "Error getting sharing links for document: $_"
+                            }
+                        }
+                    }
+                    catch {
+                        Write-DebugLog -LogName $Log -LogEntryText "Error parsing document URL: $_"
+                    }
+                }
+                else {
+                    Write-DebugLog -LogName $Log -LogEntryText "No document details found for group: $groupName"
+                }
+            }
+        }
+    }
+    catch {
+        Write-Host "  Error collecting sharing link URLs for site $SiteUrl : $_" -ForegroundColor Red
+        Write-ErrorLog -LogName $Log -LogEntryText "Error collecting sharing link URLs for site $SiteUrl : $_"
+    }
+}
+
 # Main Processing Loop
 # ----------------------------------------------
 $totalSites = $sites.Count
 $processedCount = 0
 $sitesWithSharingLinksCount = 0
 $organizationLinksProcessedCount = 0
+
+# Display script mode information again before starting site processing
+Write-Host ""
+Write-Host "======================================================" -ForegroundColor $(if ($convertOrganizationLinks) { "Yellow" } else { "Cyan" })
+Write-Host "SCRIPT MODE: $scriptMode" -ForegroundColor $(if ($convertOrganizationLinks) { "Yellow" } else { "Cyan" })
+if ($convertOrganizationLinks) {
+    Write-Host "  - Organization sharing links will be CONVERTED to direct permissions" -ForegroundColor Yellow
+    Write-Host "  - Corrupted sharing groups will be cleaned up automatically" -ForegroundColor Yellow
+}
+else {
+    Write-Host "  - Only DETECTING and INVENTORYING sharing links" -ForegroundColor Cyan
+    Write-Host "  - NO modifications will be made to permissions or sharing links" -ForegroundColor Cyan
+    Write-Host "  - Results will be saved to: $sharingLinksOutputFile" -ForegroundColor Cyan
+}
+Write-Host "======================================================" -ForegroundColor $(if ($convertOrganizationLinks) { "Yellow" } else { "Cyan" })
+Write-Host ""
+Write-InfoLog -LogName $Log -LogEntryText "Starting to process $totalSites sites in $scriptMode mode"
 
 foreach ($site in $sites) {
     $processedCount++
@@ -1520,6 +1747,7 @@ foreach ($site in $sites) {
                                                 from                      = 0
                                                 size                      = 25
                                                 sharePointOneDriveOptions = @{
+
                                                     includeContent = "sharedContent,privateContent"
                                                 }
                                                 region                    = $searchRegion
@@ -1583,11 +1811,12 @@ foreach ($site in $sites) {
                             }
                             
                             $siteCollectionData[$siteUrl]["DocumentDetails"][$spGroupName] = @{
-                                "DocumentId"    = $documentId
-                                "SharingType"   = $sharingType
-                                "DocumentUrl"   = $documentUrl
-                                "DocumentOwner" = $documentOwner
-                                "SharedOn"      = $siteUrl
+                                "DocumentId"     = $documentId
+                                "SharingType"    = $sharingType
+                                "DocumentUrl"    = $documentUrl
+                                "DocumentOwner"  = $documentOwner
+                                "SharedOn"       = $siteUrl
+                                "SharingLinkUrl" = "" # Will be populated when processing sharing links
                             }
                             
                             Write-DebugLog -LogName $Log -LogEntryText "Stored sharing information for document ID $documentId"
@@ -1602,6 +1831,9 @@ foreach ($site in $sites) {
             # Process and write sharing links data for this site immediately if any found
             if ($siteCollectionData[$siteUrl]["Has Sharing Links"]) {
                 $sitesWithSharingLinksCount++
+                
+                # Collect sharing link URLs for all sites, whether in detection or remediation mode
+                Get-SharingLinkUrls -SiteUrl $siteUrl
                 
                 # Convert Organization sharing links to direct permissions if enabled
                 if ($convertOrganizationLinks) {
