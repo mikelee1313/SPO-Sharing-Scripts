@@ -67,7 +67,7 @@ Get-Module -Name PnP.PowerShell -ListAvailable
 
 ### Step 2: Download the Script
 
-1. Download `Get-and-Remove-SPOSharingLinks-pnp2x.ps1` to your local machine
+1. Download `Get-and-Remove-SPOSharingLinks-pnpxx.ps1` to your local machine
 2. Save it in a dedicated folder (e.g., `C:\SharePointScripts\`)
 
 ### Step 3: Create Entra ID Application
