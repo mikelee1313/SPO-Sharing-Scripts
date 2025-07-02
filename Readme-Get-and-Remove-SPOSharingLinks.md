@@ -1,5 +1,7 @@
 # SharePoint Online Sharing Links Management Script
 
+> **⚠️ IMPORTANT DISCLAIMER:** When removing sharing links (`$RemoveSharingLink = $true`), the changes are PERMANENT. Any documents, emails, or messages using these sharing links will no longer work after removal. Users will need to be provided with direct access links to the documents instead. Carefully consider the impact before removing sharing links in production environments.
+
 ## Overview
 
 The **Get-and-Remove-SPOSharingLinks-pnpxx.ps1** script is a comprehensive PowerShell tool designed to identify, inventory, and remediate SharePoint Online sharing links across your Microsoft 365 tenant. It focuses specifically on **Organization sharing links** and provides a two-step workflow for safe and efficient remediation.
@@ -67,7 +69,7 @@ Get-Module -Name PnP.PowerShell -ListAvailable
 
 ### Step 2: Download the Script
 
-1. Download `Get-and-Remove-SPOSharingLinks-pnpxx.ps1` to your local machine
+1. Download `Get-and-Remove-SPOSharingLinks-pnp2x.ps1` to your local machine
 2. Save it in a dedicated folder (e.g., `C:\SharePointScripts\`)
 
 ### Step 3: Create Entra ID Application
@@ -191,7 +193,10 @@ $RemoveSharingLink = $false  # This preserves the sharing links
 # - Users are still converted to direct permissions
 # - Sharing links remain intact and functional
 # - Corrupted sharing groups are NOT cleaned up
+# - Any existing references to these links in documents/emails will continue to work
 ```
+
+> **💡 TIP:** Using `$RemoveSharingLink = $false` is recommended if you're unsure about the impact of removing sharing links. This ensures any existing references to the links continue to work while still converting users to direct permissions.
 
 ### 📊 Alternative Workflows
 
@@ -237,7 +242,7 @@ $inputfile = $null
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `$convertOrganizationLinks` | Boolean | `$false` | Enable remediation mode |
-| `$RemoveSharingLink` | Boolean | `$true` | When `$true`, removes sharing links after converting users. When `$false`, preserves sharing links while still converting users to direct permissions. |
+| `$RemoveSharingLink` | Boolean | `$true` | When `$true`, removes sharing links after converting users. When `$false`, preserves sharing links while still converting users to direct permissions. **⚠️ WARNING:** Removing sharing links (`$true`) will permanently break any existing references to these links in documents, emails, or messages. |
 | `$cleanupCorruptedSharingGroups` | Boolean | `$false`* | Clean up empty sharing groups |
 | `$debugLogging` | Boolean | `$true` | Enable detailed logging |
 | `$inputfile` | String | `$null` | Path to input CSV file |
@@ -310,6 +315,8 @@ $RemoveSharingLink = $true  # Default: removes sharing links after user conversi
 .\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
 ```
 
+> **⚠️ CAUTION:** When using `$RemoveSharingLink = $true`, be prepared to update any documents, emails, or messages that contain these sharing links, as they will stop working after the script runs.
+
 ### � Scenario 3: Convert Users but Preserve Sharing Links
 
 ```powershell
@@ -320,6 +327,8 @@ $RemoveSharingLink = $false  # Preserves sharing links
 $inputfile = "C:\temp\sites_to_process.csv"
 .\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
 ```
+
+> **💡 RECOMMENDED APPROACH:** This scenario provides a safe middle ground - users get direct permissions while existing sharing links continue to function, minimizing disruption.
 
 ### �📊 Scenario 4: Executive Dashboard Data
 
@@ -503,6 +512,8 @@ Get-ChildItem -Path "Cert:\LocalMachine\My"
 - ✅ **Start with report mode** before remediation
 - ✅ **Review CSV output** before running remediation
 - ✅ **Consider whether to preserve sharing links** by setting `$RemoveSharingLink = $false`
+  - ⚠️ **IMPORTANT:** Removing sharing links permanently breaks any links shared in documents or emails
+  - 💡 **RECOMMENDATION:** Start with `$RemoveSharingLink = $false` to minimize disruption
 - ✅ **Backup important data** before making changes
 - ✅ **Run during maintenance windows** for large operations
 - ✅ **Monitor performance** and adjust timing as needed
