@@ -121,8 +121,8 @@ $appID = "5baa1427-1e90-4501-831d-a8e67465f0d9"                 # This is your E
 $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certificate thumbprint
 $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"                # This is your Tenant ID
 $searchRegion = "NAM"                                           # Region for Microsoft Graph search
-$convertOrganizationLinks = $false                             # Set to $false for DETECTION mode (report only), $true for REMEDIATION mode (converts Organization sharing links to direct permissions)
-$RemoveSharingLink = $false                                      # Set to $true to remove sharing links after converting users, $false to keep sharing links intact
+$convertOrganizationLinks = $false                              # Set to $false for DETECTION mode (report only), $true for REMEDIATION mode (converts Organization sharing links to direct permissions)
+$RemoveSharingLink = $true                                      # Set to $true to remove sharing links after converting users, $false to keep sharing links intact
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
