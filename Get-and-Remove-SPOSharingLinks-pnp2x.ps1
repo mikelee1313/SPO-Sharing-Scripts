@@ -124,7 +124,7 @@ $date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 # ----------------------------------------------
 # Input / Output and Log Files
 # ----------------------------------------------
-$inputfile = $null #If no input file specified, will process all sites in the tenant
+$inputfile = "" #If no input file specified, will process all sites in the tenant
 $log = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "logfile.log"
 # Initialize sharing links output file
 $sharingLinksOutputFile = "$env:TEMP\" + 'SPO_SharingLinks_' + $date + '.csv'
@@ -142,7 +142,7 @@ Function Write-LogEntry {
     # Always log INFO and ERROR messages
     # Only log DEBUG messages when debug logging is enabled
     if ($Level -eq "ERROR" -or $Level -eq "INFO" -or ($Level -eq "DEBUG" -and $debugLogging)) {
-        if ($LogName -ne $null) {
+        if ($null -ne $LogName) {
             # log the date and time in the text file along with the data passed
             "$([DateTime]::Now.ToShortDateString()) $([DateTime]::Now.ToShortTimeString()) [$Level] : $LogEntryText" | Out-File -FilePath $LogName -append;
         }
@@ -350,6 +350,10 @@ if ($inputfile -and (Test-Path -Path $inputfile)) {
                     Write-Host "Auto-enabling Organization link conversion for CSV input mode" -ForegroundColor Green
                     $convertOrganizationLinks = $true
                     $cleanupCorruptedSharingGroups = $true
+                    
+                    # Update the script mode to reflect the change
+                    $scriptMode = "REMEDIATION"
+                    Write-Host "Updated script mode to $scriptMode" -ForegroundColor Yellow
                     Write-InfoLog -LogName $Log -LogEntryText "Auto-enabled remediation mode and cleanup for CSV input containing Organization links"
                 }
                 
@@ -1534,6 +1538,8 @@ Function Get-SharingLinkUrls {
             if ($groupName -match "SharingLinks\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.") {
                 $documentId = $matches[1]
                 Write-DebugLog -LogName $Log -LogEntryText "Processing sharing group: $groupName with document ID: $documentId"
+                
+
                 
                 # Check if we have document details for this group
                 if ($siteCollectionData[$SiteUrl].ContainsKey("DocumentDetails") -and 
