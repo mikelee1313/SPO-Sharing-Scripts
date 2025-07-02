@@ -122,7 +122,7 @@ $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certif
 $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"                # This is your Tenant ID
 $searchRegion = "NAM"                                           # Region for Microsoft Graph search
 $convertOrganizationLinks = $false                             # Set to $false for DETECTION mode (report only), $true for REMEDIATION mode (converts Organization sharing links to direct permissions)
-$RemoveSharingLink = $false                                      # Set to $true to remove sharing links after converting users, $false to keep sharing links intact
+$RemoveSharingLink = $true                                      # Set to $true to remove sharing links after converting users, $false to keep sharing links intact
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
