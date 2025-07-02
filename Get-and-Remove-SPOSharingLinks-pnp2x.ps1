@@ -26,6 +26,11 @@
     When set to $true, the script converts Organization sharing links to direct permissions.
     When set to $false, the script only inventories sharing links without modifying them.
 
+.PARAMETER RemoveSharingLink
+    When set to $true (default), the script removes the sharing link groups after converting users to direct permissions.
+    When set to $false, the script keeps the sharing links intact after converting users to direct permissions.
+    Note: This parameter is only relevant when convertOrganizationLinks is set to $true.
+
 .PARAMETER cleanupCorruptedSharingGroups
     When set to $true, the script attempts to clean up empty or corrupted sharing groups.
     When set to $false, no cleanup of sharing groups is performed.
@@ -100,6 +105,12 @@
     $inputfile = "C:\temp\SPO_SharingLinks_2025-07-01_14-30-15.csv"
     # Note: $convertOrganizationLinks will be automatically set to $true when using script's CSV output
     .\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
+
+.EXAMPLE
+    # Process all sites and convert Organization links to direct permissions but KEEP the sharing links intact
+    $convertOrganizationLinks = $true
+    $RemoveSharingLink = $false  # This will preserve the sharing links after converting users to direct permissions
+    .\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
 #>
 
 # ----------------------------------------------
@@ -111,6 +122,7 @@ $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certif
 $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"                # This is your Tenant ID
 $searchRegion = "NAM"                                           # Region for Microsoft Graph search
 $convertOrganizationLinks = $false                             # Set to $false for DETECTION mode (report only), $true for REMEDIATION mode (converts Organization sharing links to direct permissions)
+$RemoveSharingLink = $false                                      # Set to $true to remove sharing links after converting users, $false to keep sharing links intact
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
@@ -186,13 +198,32 @@ $scriptMode = if ($convertOrganizationLinks) { "REMEDIATION" } else { "DETECTION
 Write-Host "Script is running in $scriptMode mode" -ForegroundColor $(if ($convertOrganizationLinks) { "Yellow" } else { "Cyan" })
 Write-InfoLog -LogName $Log -LogEntryText "Script is running in $scriptMode mode - $(if ($convertOrganizationLinks) { 'Converting Organization links to direct permissions' } else { 'Only detecting and inventorying sharing links, no modifications will be made' })"
 
+# Add info about whether sharing links will be removed
+if ($convertOrganizationLinks) {
+    $linkRemovalStatus = if ($RemoveSharingLink) { "Sharing links WILL be removed" } else { "Sharing links will be PRESERVED" }
+    $cleanupStatus = if ($cleanupCorruptedSharingGroups) { "Corrupted sharing groups WILL be cleaned up" } else { "Corrupted sharing groups will NOT be cleaned up" }
+    
+    Write-Host "  $linkRemovalStatus after converting users to direct permissions" -ForegroundColor $(if ($RemoveSharingLink) { "Yellow" } else { "Green" })
+    Write-Host "  $cleanupStatus" -ForegroundColor $(if ($cleanupCorruptedSharingGroups) { "Yellow" } else { "Green" })
+    
+    Write-InfoLog -LogName $Log -LogEntryText "$linkRemovalStatus"
+    Write-InfoLog -LogName $Log -LogEntryText "$cleanupStatus"
+}
+
 # ----------------------------------------------
 # Smart Switch for auto cleanupCorruptedSharingGroups
 # ----------------------------------------------
 # Auto-enable cleanup when in remediation mode (converting Organization links)
 if ($convertOrganizationLinks) {
-    $cleanupCorruptedSharingGroups = $true
-    Write-InfoLog -LogName $Log -LogEntryText "Auto-enabled cleanup of corrupted sharing groups because remediation mode is active"
+    # Only enable cleanup if we're removing sharing links
+    if ($RemoveSharingLink) {
+        $cleanupCorruptedSharingGroups = $true
+        Write-InfoLog -LogName $Log -LogEntryText "Auto-enabled cleanup of corrupted sharing groups because remediation mode is active with link removal"
+    }
+    else {
+        $cleanupCorruptedSharingGroups = $false
+        Write-InfoLog -LogName $Log -LogEntryText "Disabled cleanup of corrupted sharing groups because sharing links are being preserved"
+    }
 }
 
 
@@ -581,6 +612,9 @@ Function Convert-OrganizationSharingLinks {
         # First, clean up any corrupted sharing groups if enabled
         if ($cleanupCorruptedSharingGroups) {
             Remove-CorruptedSharingGroups -SiteUrl $SiteUrl
+        }
+        else {
+            Write-DebugLog -LogName $Log -LogEntryText "Skipping corrupted sharing groups cleanup as it's disabled"
         }
         
         # Get all SharePoint groups that contain "Organization" in the name
@@ -1067,12 +1101,20 @@ Function Convert-OrganizationSharingLinks {
                                                 Write-InfoLog -LogName $Log -LogEntryText "Stored sharing link URL for group $groupName - URL: $sharingLinkUrl"
                                             }
                                             
-                                            # Remove the sharing link using the file URL and sharing link ID
-                                            Remove-PnPFileSharingLink -FileUrl $relativePath -Id $sharingLink.Id -Force
-                                            
-                                            Write-Host "        Successfully removed sharing link using PnP methods" -ForegroundColor Green
-                                            Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing link with ID: $($sharingLink.Id)"
-                                            $linkRemoved = $true
+                                            # Only remove the sharing link if RemoveSharingLink is true
+                                            if ($RemoveSharingLink) {
+                                                # Remove the sharing link using the file URL and sharing link ID
+                                                Remove-PnPFileSharingLink -FileUrl $relativePath -Id $sharingLink.Id -Force
+                                                
+                                                Write-Host "        Successfully removed sharing link using PnP methods" -ForegroundColor Green
+                                                Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing link with ID: $($sharingLink.Id)"
+                                                $linkRemoved = $true
+                                            }
+                                            else {
+                                                Write-Host "        Preserving sharing link as requested (RemoveSharingLink = $false)" -ForegroundColor Cyan
+                                                Write-InfoLog -LogName $Log -LogEntryText "Preserved sharing link with ID: $($sharingLink.Id) (RemoveSharingLink = $false)"
+                                                $linkRemoved = $true  # Mark as processed even though we didn't actually remove it
+                                            }
                                             break
                                         }
                                     }
@@ -1166,17 +1208,25 @@ Function Convert-OrganizationSharingLinks {
                                                 if ($sharingInfo.SharingLinks -and $sharingInfo.SharingLinks.Count -gt 0) {
                                                     foreach ($link in $sharingInfo.SharingLinks) {
                                                         if ($link.ShareId -and $groupName -like "*$($link.ShareId)*") {
-                                                            # Found the matching link, try to delete it
-                                                            $deleteResult = [Microsoft.SharePoint.Client.Sharing.WebSharingManager]::DeleteSharingLinkByUrl($ctx, $link.Url)
-                                                            $ctx.Load($deleteResult)
-                                                            $ctx.ExecuteQuery()
-                                                            
-                                                            if ($deleteResult.Value) {
-                                                                Write-Host "        Successfully removed sharing link using CSOM WebSharingManager" -ForegroundColor Green
-                                                                Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing link using CSOM WebSharingManager"
-                                                                $linkRemoved = $true
-                                                                break
+                                                            # Only delete the link if RemoveSharingLink is true
+                                                            if ($RemoveSharingLink) {
+                                                                # Found the matching link, try to delete it
+                                                                $deleteResult = [Microsoft.SharePoint.Client.Sharing.WebSharingManager]::DeleteSharingLinkByUrl($ctx, $link.Url)
+                                                                $ctx.Load($deleteResult)
+                                                                $ctx.ExecuteQuery()
+                                                                
+                                                                if ($deleteResult.Value) {
+                                                                    Write-Host "        Successfully removed sharing link using CSOM WebSharingManager" -ForegroundColor Green
+                                                                    Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing link using CSOM WebSharingManager"
+                                                                    $linkRemoved = $true
+                                                                }
                                                             }
+                                                            else {
+                                                                Write-Host "        Preserving sharing link as requested (RemoveSharingLink = $false)" -ForegroundColor Cyan
+                                                                Write-InfoLog -LogName $Log -LogEntryText "Preserved sharing link using CSOM WebSharingManager (RemoveSharingLink = $false)"
+                                                                $linkRemoved = $true  # Mark as processed even though we didn't actually remove it
+                                                            }
+                                                            break
                                                         }
                                                     }
                                                 }
@@ -1307,9 +1357,15 @@ Function Convert-OrganizationSharingLinks {
                         }
                     }
                     else {
-                        # Sharing link was successfully removed, no need to remove group
-                        Write-Host "      Sharing link successfully removed, group should be automatically cleaned up" -ForegroundColor Green
-                        Write-LogEntry -LogName $Log -LogEntryText "Sharing link successfully removed for group $groupName, skipping manual group removal" -Level "INFO"
+                        # Sharing link was successfully processed
+                        if ($RemoveSharingLink) {
+                            Write-Host "      Sharing link successfully removed, group should be automatically cleaned up" -ForegroundColor Green
+                            Write-LogEntry -LogName $Log -LogEntryText "Sharing link successfully removed for group $groupName, skipping manual group removal" -Level "INFO"
+                        }
+                        else {
+                            Write-Host "      Users converted to direct permissions, sharing link preserved as requested" -ForegroundColor Cyan
+                            Write-LogEntry -LogName $Log -LogEntryText "Users converted to direct permissions for group $groupName, sharing link preserved (RemoveSharingLink = $false)" -Level "INFO"
+                        }
                     }
                     
                     # Update the link removal status in site collection data
@@ -1885,7 +1941,9 @@ if ($sitesWithSharingLinksCount -gt 0) {
     
     if ($convertOrganizationLinks) {
         Write-Host "Processed Organization sharing links on $organizationLinksProcessedCount sites" -ForegroundColor Green
-        Write-InfoLog -LogName $Log -LogEntryText "Processed Organization sharing links on $organizationLinksProcessedCount sites"
+        Write-Host "  Sharing link removal: $(if ($RemoveSharingLink) { 'ENABLED - Links were removed' } else { 'DISABLED - Links were preserved' })" -ForegroundColor $(if ($RemoveSharingLink) { "Yellow" } else { "Cyan" })
+        Write-Host "  Group cleanup: $(if ($cleanupCorruptedSharingGroups) { 'ENABLED - Corrupted groups were cleaned up' } else { 'DISABLED - Corrupted groups were preserved' })" -ForegroundColor $(if ($cleanupCorruptedSharingGroups) { "Yellow" } else { "Cyan" })
+        Write-InfoLog -LogName $Log -LogEntryText "Processed Organization sharing links on $organizationLinksProcessedCount sites (RemoveSharingLink=$RemoveSharingLink, cleanupCorruptedSharingGroups=$cleanupCorruptedSharingGroups)"
     }
 }
 else {
