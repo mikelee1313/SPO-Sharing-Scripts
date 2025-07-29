@@ -1,4 +1,3 @@
-```markdown
 # SPO-Sharing-Scripts
 
 Used to locate Sharing links and users with access across SharePoint Online / OneDrive Sites.
@@ -49,7 +48,3 @@ Some scripts have additional documentation:
 MIT License. See [LICENSE](LICENSE) for details.
 
 ---
-
-For more scripts and details, view the full directory:  
-https://github.com/mikelee1313/SPO-Sharing-Scripts/tree/main/
-```
