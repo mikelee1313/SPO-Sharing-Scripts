@@ -1,3 +1,4 @@
+```markdown
 # SPO-Sharing-Scripts
 
 Used to locate Sharing links and users with access across SharePoint Online / OneDrive Sites.
@@ -23,8 +24,11 @@ This repository provides PowerShell scripts for Microsoft 365 administrators to 
 - [SPO-RemoveSharedLinks.ps1](https://github.com/mikelee1313/SPO-Sharing-Scripts/blob/main/SPO-RemoveSharedLinks.ps1)  
   Scans for and removes sharing links from SPO items to tighten security.
 
+- [SPOUserRemover.ps1](https://github.com/mikelee1313/SPO-Sharing-Scripts/blob/main/SPOUserRemover.ps1)  
+  Removes specified users from SharePoint Online or OneDrive sites to help manage and audit site access.
+
 - [get-allgroups](https://github.com/mikelee1313/SPO-Sharing-Scripts/blob/main/get-allgroups)  
-  A script or to enumerate all groups in Entra AD
+  A script to enumerate all groups in Entra AD
   
 ## Documentation
 
@@ -40,7 +44,6 @@ Some scripts have additional documentation:
 - SharePoint Online Management Shell or PnP PowerShell modules
 - Appropriate permissions in your Microsoft 365 tenant
 
-
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
@@ -49,3 +52,4 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 For more scripts and details, view the full directory:  
 https://github.com/mikelee1313/SPO-Sharing-Scripts/tree/main/
+```
