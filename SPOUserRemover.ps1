@@ -406,9 +406,13 @@ function Remove-UserFromSharingLinks {
     Write-Host "`nRemoving users from sharing links..." -ForegroundColor Cyan
     Write-Log "Starting removal of users from sharing links"
     
+    # IMPORTANT: This function does NOT revoke entire sharing links to preserve access for legitimate users
+    # Instead, it removes users from sharing groups which controls their access to shared content
+    # Sharing links themselves are preserved to maintain access for other authorized users
+    
     try {
-        # Step 1: Process each file to find and revoke sharing links that contain the target users
-        Write-Host "`nStep 1: Identifying and revoking sharing links containing target users..." -ForegroundColor Cyan
+        # Step 1: Identify sharing links containing target users (for logging purposes only)
+        Write-Host "`nStep 1: Identifying sharing links containing target users (links will be preserved)..." -ForegroundColor Cyan
         
         $lists = Invoke-WithThrottleHandling -ScriptBlock {
             Get-PnPList | Where-Object { $_.Hidden -eq $false -and $_.BaseType -eq "DocumentLibrary" }
@@ -485,23 +489,13 @@ function Remove-UserFromSharingLinks {
                                     }
                                 }
                                 
-                                # If we found target users in this sharing link, revoke it entirely
+                                # If we found target users in this sharing link, we need to handle this more carefully
+                                # Note: SharePoint doesn't provide direct API to remove specific users from sharing links
+                                # The safest approach is to rely on group membership removal which controls access
                                 if ($shouldRevokeLink) {
-                                    try {
-                                        Write-Host "    Revoking flexible sharing link for file: $($item["FileLeafRef"]) (users: $($usersToRemove -join ', '))" -ForegroundColor Yellow
-                                        
-                                        Invoke-WithThrottleHandling -ScriptBlock {
-                                            # Revoke the specific sharing link
-                                            Remove-PnPFileSharingLink -Identity $item.FieldValues.FileRef -ShareId $sharingLink.ShareId -Force
-                                        } -Operation "Revoke sharing link for file $($item["FileLeafRef"])"
-                                        
-                                        Write-Host "    Successfully revoked sharing link for file: $($item["FileLeafRef"])" -ForegroundColor Green
-                                        Write-Log "Successfully revoked sharing link (ID: $($sharingLink.ShareId)) for file $($item["FileLeafRef"]) containing users: $($usersToRemove -join ', ')"
-                                    }
-                                    catch {
-                                        Write-Host "    Error revoking sharing link for file $($item["FileLeafRef"]): $_" -ForegroundColor Red
-                                        Write-Log "Error revoking sharing link for file $($item["FileLeafRef"]): $_" "ERROR"
-                                    }
+                                    Write-Host "    Found target users in flexible sharing link for file: $($item["FileLeafRef"]) (users: $($usersToRemove -join ', '))" -ForegroundColor Yellow
+                                    Write-Log "Found target users in flexible sharing link for file $($item["FileLeafRef"]) - access will be controlled through group membership removal"
+                                    Write-Host "    Note: Sharing link preserved for other legitimate users. Access control handled via group membership." -ForegroundColor Cyan
                                 }
                             }
                         }
@@ -588,16 +582,16 @@ function Remove-UserFromSharingLinks {
             }
         }
         
-        # Step 3: Enhanced sharing link revocation using SharePoint REST API
-        Write-Host "`nStep 3: Enhanced sharing link revocation (addressing flexible link access issue)..." -ForegroundColor Cyan
-        Write-Log "Starting enhanced sharing link revocation to fully invalidate flexible links"
+        # Step 3: Verify sharing link access control (no longer revoking entire links)
+        Write-Host "`nStep 3: Verifying sharing link access control (preserving links for legitimate users)..." -ForegroundColor Cyan
+        Write-Log "Verifying sharing link access control - links preserved, access controlled via group membership removal"
         
         $lists = Invoke-WithThrottleHandling -ScriptBlock {
             Get-PnPList | Where-Object { $_.Hidden -eq $false -and $_.BaseType -eq "DocumentLibrary" }
-        } -Operation "Get document libraries for enhanced sharing cleanup"
+        } -Operation "Get document libraries for sharing verification"
         
         foreach ($list in $lists) {
-            Write-Host "  Processing library for enhanced cleanup: $($list.Title)" -ForegroundColor Yellow
+            Write-Host "  Verifying sharing access control for library: $($list.Title)" -ForegroundColor Yellow
             
             try {
                 $items = Invoke-WithThrottleHandling -ScriptBlock {
@@ -615,25 +609,13 @@ function Remove-UserFromSharingLinks {
                             Write-Log "Found $($sharingLinks.Count) sharing link(s) for file $($item["FileLeafRef"])"
                             
                             foreach ($sharingLink in $sharingLinks) {
-                                # For flexible links, revoke them entirely to ensure access is truly removed
+                                # Log sharing links found but do not revoke them entirely
+                                # Access control is handled through group membership removal in Step 2
                                 if ($sharingLink.ShareLink.ShareKind -eq "Flexible") {
-                                    try {
-                                        Write-Host "    Revoking flexible sharing link for file: $($item["FileLeafRef"])" -ForegroundColor Yellow
-                                        
-                                        Invoke-WithThrottleHandling -ScriptBlock {
-                                            # Revoke the specific sharing link entirely
-                                            Remove-PnPFileSharingLink -Identity $item.FieldValues.FileRef -ShareId $sharingLink.ShareId -Force
-                                        } -Operation "Revoke flexible sharing link for file $($item["FileLeafRef"])"
-                                        
-                                        Write-Host "    Successfully revoked flexible sharing link for file: $($item["FileLeafRef"])" -ForegroundColor Green
-                                        Write-Log "Successfully revoked flexible sharing link (ID: $($sharingLink.ShareId)) for file $($item["FileLeafRef"]) to prevent continued access"
-                                    }
-                                    catch {
-                                        Write-Host "    Error revoking flexible sharing link for file $($item["FileLeafRef"]): $_" -ForegroundColor Red
-                                        Write-Log "Error revoking flexible sharing link for file $($item["FileLeafRef"]): $_" "ERROR"
-                                    }
+                                    Write-Host "    Found flexible sharing link for file: $($item["FileLeafRef"]) - access controlled via group membership" -ForegroundColor Cyan
+                                    Write-Log "Found flexible sharing link (ID: $($sharingLink.ShareId)) for file $($item["FileLeafRef"]) - preserved for legitimate users, access controlled via group membership removal"
                                 }
-                                # For other link types, log that they were found but skip REST API approach
+                                # For other link types, log that they were found
                                 else {
                                     Write-Log "Found $($sharingLink.ShareLink.ShareKind) sharing link for file $($item["FileLeafRef"]) - access controlled by group membership removal (completed in Step 2)"
                                 }
@@ -649,8 +631,8 @@ function Remove-UserFromSharingLinks {
                 }
             }
             catch {
-                Write-Host "  Error processing library $($list.Title) for enhanced cleanup: $_" -ForegroundColor Red
-                Write-Log "Error processing library $($list.Title) for enhanced cleanup: $_" "ERROR"
+                Write-Host "  Error processing library $($list.Title) for sharing verification: $_" -ForegroundColor Red
+                Write-Log "Error processing library $($list.Title) for sharing verification: $_" "ERROR"
             }
         }
         
