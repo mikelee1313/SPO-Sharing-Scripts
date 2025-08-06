@@ -58,7 +58,7 @@
 
 .NOTES
     Authors: Mike Lee
-    Date: 7/2/2025
+    Updated: 8/6/2025
 
     - Requires PnP.PowerShell 3.x module
     - Requires an Entra app registration with appropriate SharePoint permissions
@@ -436,7 +436,7 @@ $siteCollectionData = @{}
 # ----------------------------------------------
 # Initialize the sharing links output file with headers
 # ----------------------------------------------
-$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,Sharing Link URL,IsTeamsConnected,SharingCapability,Last Content Modified,Link Removed"
+$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,Sharing Link URL,Link Expiration Date,IsTeamsConnected,SharingCapability,Last Content Modified,Link Removed"
 Set-Content -Path $sharingLinksOutputFile -Value $sharingLinksHeaders
 Write-InfoLog -LogName $Log -LogEntryText "Initialized sharing links output file: $sharingLinksOutputFile"
 
@@ -555,10 +555,12 @@ Function Write-SiteSharingLinks {
                 $documentUrl = "Not found"
                 $documentOwner = "Not found"
                 $sharingLinkUrl = "Not found"
+                $linkExpirationDate = "Not found"
                 if ($SiteData.ContainsKey("DocumentDetails") -and $SiteData["DocumentDetails"].ContainsKey($sharingGroup)) {
                     $documentUrl = $SiteData["DocumentDetails"][$sharingGroup]["DocumentUrl"]
                     $documentOwner = $SiteData["DocumentDetails"][$sharingGroup]["DocumentOwner"]
                     $sharingLinkUrl = $SiteData["DocumentDetails"][$sharingGroup]["SharingLinkUrl"]
+                    $linkExpirationDate = $SiteData["DocumentDetails"][$sharingGroup]["ExpirationDate"]
                 }
                 
                 # Get link removal status
@@ -579,6 +581,7 @@ Function Write-SiteSharingLinks {
                     "File URL"              = $documentUrl
                     "File Owner"            = $documentOwner
                     "Sharing Link URL"      = $sharingLinkUrl
+                    "Link Expiration Date"  = $linkExpirationDate
                     "IsTeamsConnected"      = $SiteData.IsTeamsConnected
                     "SharingCapability"     = $SiteData.SharingCapability
                     "Last Content Modified" = $SiteData.LastContentModifiedDate
@@ -1096,9 +1099,36 @@ Function Convert-OrganizationSharingLinks {
                                                 else { 
                                                     "Not found" 
                                                 }
-                                                $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
                                                 
-                                                Write-InfoLog -LogName $Log -LogEntryText "Stored sharing link URL for group $groupName - URL: $sharingLinkUrl"
+                                                # Get the expiration date of the sharing link
+                                                $expirationDate = "No expiration"
+                                                if ($sharingLink.link -and $sharingLink.link.ExpirationDateTime) {
+                                                    # Format the expiration date to a readable format
+                                                    try {
+                                                        $expDate = [DateTime]::Parse($sharingLink.link.ExpirationDateTime)
+                                                        $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                                    }
+                                                    catch {
+                                                        $expirationDate = $sharingLink.link.ExpirationDateTime
+                                                        Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($sharingLink.link.ExpirationDateTime)"
+                                                    }
+                                                }
+                                                elseif ($sharingLink.ExpirationDateTime) {
+                                                    # Alternative location for expiration date
+                                                    try {
+                                                        $expDate = [DateTime]::Parse($sharingLink.ExpirationDateTime)
+                                                        $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                                    }
+                                                    catch {
+                                                        $expirationDate = $sharingLink.ExpirationDateTime
+                                                        Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($sharingLink.ExpirationDateTime)"
+                                                    }
+                                                }
+                                                
+                                                $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
+                                                $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["ExpirationDate"] = $expirationDate
+                                                
+                                                Write-InfoLog -LogName $Log -LogEntryText "Stored sharing link URL for group $groupName - URL: $sharingLinkUrl, Expiration: $expirationDate"
                                             }
                                             
                                             # Only remove the sharing link if RemoveSharingLink is true
@@ -1629,9 +1659,17 @@ Function Get-SharingLinkUrls {
                                             if ($firstLink.link.WebUrl) {
                                                 Write-DebugLog -LogName $Log -LogEntryText "WebUrl found: $($firstLink.link.WebUrl)"
                                             }
+                                            if ($firstLink.link.ExpirationDateTime) {
+                                                Write-DebugLog -LogName $Log -LogEntryText "ExpirationDateTime found: $($firstLink.link.ExpirationDateTime)"
+                                            }
                                         }
                                         else {
                                             Write-DebugLog -LogName $Log -LogEntryText "Link property doesn't exist or is null"
+                                        }
+                                        
+                                        # Also check for expiration date at the top level
+                                        if ($firstLink.ExpirationDateTime) {
+                                            Write-DebugLog -LogName $Log -LogEntryText "Top-level ExpirationDateTime found: $($firstLink.ExpirationDateTime)"
                                         }
                                     }
                                     
@@ -1646,10 +1684,37 @@ Function Get-SharingLinkUrls {
                                         else { 
                                             "Not found" 
                                         }
+                                        
+                                        # Get the expiration date of the sharing link
+                                        $expirationDate = "No expiration"
+                                        if ($matchingLink.link -and $matchingLink.link.ExpirationDateTime) {
+                                            # Format the expiration date to a readable format
+                                            try {
+                                                $expDate = [DateTime]::Parse($matchingLink.link.ExpirationDateTime)
+                                                $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                            }
+                                            catch {
+                                                $expirationDate = $matchingLink.link.ExpirationDateTime
+                                                Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($matchingLink.link.ExpirationDateTime)"
+                                            }
+                                        }
+                                        elseif ($matchingLink.ExpirationDateTime) {
+                                            # Alternative location for expiration date
+                                            try {
+                                                $expDate = [DateTime]::Parse($matchingLink.ExpirationDateTime)
+                                                $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                            }
+                                            catch {
+                                                $expirationDate = $matchingLink.ExpirationDateTime
+                                                Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($matchingLink.ExpirationDateTime)"
+                                            }
+                                        }
+                                        
                                         $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
+                                        $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["ExpirationDate"] = $expirationDate
                                         
                                         Write-Host "      Found sharing link URL for group: $groupName" -ForegroundColor Green
-                                        Write-InfoLog -LogName $Log -LogEntryText "Found sharing link URL for group $groupName - URL: $sharingLinkUrl"
+                                        Write-InfoLog -LogName $Log -LogEntryText "Found sharing link URL for group $groupName - URL: $sharingLinkUrl, Expiration: $expirationDate"
                                     }
                                     else {
                                         Write-DebugLog -LogName $Log -LogEntryText "No matching sharing link found for group: $groupName"
@@ -1879,6 +1944,7 @@ foreach ($site in $sites) {
                                 "DocumentOwner"  = $documentOwner
                                 "SharedOn"       = $siteUrl
                                 "SharingLinkUrl" = "" # Will be populated when processing sharing links
+                                "ExpirationDate" = "" # Will be populated when processing sharing links
                             }
                             
                             Write-DebugLog -LogName $Log -LogEntryText "Stored sharing information for document ID $documentId"
