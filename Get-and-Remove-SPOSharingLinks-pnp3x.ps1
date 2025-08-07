@@ -22,19 +22,16 @@
 .PARAMETER searchRegion
     The region for Microsoft Graph search operations (e.g., "NAM", "EUR").
 
-.PARAMETER convertOrganizationLinks
-    When set to $true, the script converts Organization sharing links to direct permissions.
-    When set to $false, the script only inventories sharing links without modifying them.
-
-.PARAMETER RemoveSharingLink
-    When set to $true (default), the script removes the sharing link groups after converting users to direct permissions.
-    When set to $false, the script keeps the sharing links intact after converting users to direct permissions.
-    Note: This parameter is only relevant when convertOrganizationLinks is set to $true.
+.PARAMETER Mode
+    Sets the script operation mode:
+    - "Detection": Only inventories sharing links without making any modifications (report mode)
+    - "Remediation": Converts Organization sharing links to direct permissions and removes sharing groups (remediation mode)
+    Default: "Detection"
 
 .PARAMETER cleanupCorruptedSharingGroups
     When set to $true, the script attempts to clean up empty or corrupted sharing groups.
     When set to $false, no cleanup of sharing groups is performed.
-    Note: This is automatically set to $true when convertOrganizationLinks is $true (remediation mode).
+    Note: This is automatically set to $true when Mode is set to "Remediation".
 
 .PARAMETER debugLogging
     When set to $true, the script logs detailed DEBUG operations for troubleshooting.
@@ -47,7 +44,7 @@
     
     When using the script's own CSV output as input, the script will:
     - Only process sites that have Organization sharing links (identified by group names containing "Organization")
-    - Automatically set $convertOrganizationLinks to $true for remediation
+    - Automatically set Mode to "Remediation" for focused remediation
     - Skip other types of sharing links for focused remediation
     
     If not specified, the script will process all sites in the tenant.
@@ -58,7 +55,7 @@
 
 .NOTES
     Authors: Mike Lee
-    Updated: 8/6/2025
+    Updated: 8/7/2025
 
     - Requires PnP.PowerShell 3.x module
     - Requires an Entra app registration with appropriate SharePoint permissions
@@ -66,6 +63,7 @@
         - Sharepoint:Sites.FullControl.All
         - SharePoint:User.Read.All 
         - Graph:Sites.FullControl.All
+        - Graph:Sites.Read.All
         - Graph:Files.Read.All
     - Requires a certificate for authentication
     - For optimal performance, use a certificate-based app rather than client secret
@@ -91,25 +89,24 @@
     $thumbprint = "1234567890ABCDEF1234567890ABCDEF12345678"
     $tenant = "12345678-1234-1234-1234-1234567890ab"
     $inputfile = $null
-    $convertOrganizationLinks = $false
+    $Mode = "Detection"
     # Note: $cleanupCorruptedSharingGroups will automatically be set to $true in remediation mode
     .\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
 
 .EXAMPLE
     # Two-step process: Report then Remediate
     # Step 1: Run in report mode to generate CSV output
-    $convertOrganizationLinks = $false
+    $Mode = "Detection"
     .\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
     
     # Step 2: Use the generated CSV to remediate only Organization links
     $inputfile = "C:\temp\SPO_SharingLinks_2025-07-01_14-30-15.csv"
-    # Note: $convertOrganizationLinks will be automatically set to $true when using script's CSV output
+    # Note: Mode will be automatically set to "Remediation" when using script's CSV output
     .\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
 
 .EXAMPLE
-    # Process all sites and convert Organization links to direct permissions but KEEP the sharing links intact
-    $convertOrganizationLinks = $true
-    $RemoveSharingLink = $false  # This will preserve the sharing links after converting users to direct permissions
+    # Process all sites and convert Organization links to direct permissions
+    $Mode = "Remediation"
     .\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
 #>
 
@@ -121,8 +118,7 @@ $appID = "5baa1427-1e90-4501-831d-a8e67465f0d9"                 # This is your E
 $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certificate thumbprint
 $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"                # This is your Tenant ID
 $searchRegion = "NAM"                                           # Region for Microsoft Graph search
-$convertOrganizationLinks = $false                              # Set to $false for DETECTION mode (report only), $true for REMEDIATION mode (converts Organization sharing links to direct permissions)
-$RemoveSharingLink = $false                                      # Set to $true to remove sharing links after converting users, $false to keep sharing links intact
+$Mode = "Detection"                                             # Set to "Detection" for report mode, "Remediation" to convert Organization sharing links to direct permissions
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
@@ -192,39 +188,32 @@ Function Write-ErrorLog {
 }
 
 # ----------------------------------------------
-# Determine Script Operation Mode
+# Determine Script Operation Mode and Auto-Configure Settings
 # ----------------------------------------------
-$scriptMode = if ($convertOrganizationLinks) { "REMEDIATION" } else { "DETECTION" }
+
+# Validate and normalize the Mode parameter
+if ($Mode -notin @("Detection", "Remediation")) {
+    Write-Host "Invalid Mode specified: '$Mode'. Must be 'Detection' or 'Remediation'. Defaulting to 'Detection'." -ForegroundColor Red
+    $Mode = "Detection"
+}
+
+# Set internal variables based on Mode
+$convertOrganizationLinks = ($Mode -eq "Remediation")
+$RemoveSharingLink = ($Mode -eq "Remediation")  # Always remove sharing links in Remediation mode
+
+$scriptMode = $Mode.ToUpper()
+
+# Auto-enable cleanup when in remediation mode
+if ($convertOrganizationLinks) {
+    $cleanupCorruptedSharingGroups = $true
+    Write-InfoLog -LogName $Log -LogEntryText "Auto-enabled cleanup of corrupted sharing groups because remediation mode is active"
+}
+else {
+    $cleanupCorruptedSharingGroups = $false
+}
+
 Write-Host "Script is running in $scriptMode mode" -ForegroundColor $(if ($convertOrganizationLinks) { "Yellow" } else { "Cyan" })
-Write-InfoLog -LogName $Log -LogEntryText "Script is running in $scriptMode mode - $(if ($convertOrganizationLinks) { 'Converting Organization links to direct permissions' } else { 'Only detecting and inventorying sharing links, no modifications will be made' })"
-
-# Add info about whether sharing links will be removed
-if ($convertOrganizationLinks) {
-    $linkRemovalStatus = if ($RemoveSharingLink) { "Sharing links WILL be removed" } else { "Sharing links will be PRESERVED" }
-    $cleanupStatus = if ($cleanupCorruptedSharingGroups) { "Corrupted sharing groups WILL be cleaned up" } else { "Corrupted sharing groups will NOT be cleaned up" }
-    
-    Write-Host "  $linkRemovalStatus after converting users to direct permissions" -ForegroundColor $(if ($RemoveSharingLink) { "Yellow" } else { "Green" })
-    Write-Host "  $cleanupStatus" -ForegroundColor $(if ($cleanupCorruptedSharingGroups) { "Yellow" } else { "Green" })
-    
-    Write-InfoLog -LogName $Log -LogEntryText "$linkRemovalStatus"
-    Write-InfoLog -LogName $Log -LogEntryText "$cleanupStatus"
-}
-
-# ----------------------------------------------
-# Smart Switch for auto cleanupCorruptedSharingGroups
-# ----------------------------------------------
-# Auto-enable cleanup when in remediation mode (converting Organization links)
-if ($convertOrganizationLinks) {
-    # Only enable cleanup if we're removing sharing links
-    if ($RemoveSharingLink) {
-        $cleanupCorruptedSharingGroups = $true
-        Write-InfoLog -LogName $Log -LogEntryText "Auto-enabled cleanup of corrupted sharing groups because remediation mode is active with link removal"
-    }
-    else {
-        $cleanupCorruptedSharingGroups = $false
-        Write-InfoLog -LogName $Log -LogEntryText "Disabled cleanup of corrupted sharing groups because sharing links are being preserved"
-    }
-}
+Write-InfoLog -LogName $Log -LogEntryText "Script is running in $scriptMode mode - $(if ($convertOrganizationLinks) { 'Converting Organization links to direct permissions and removing sharing links' } else { 'Only detecting and inventorying sharing links, no modifications will be made' })"
 
 
 # ----------------------------------------------
@@ -376,16 +365,18 @@ if ($inputfile -and (Test-Path -Path $inputfile)) {
                 $siteGroups = $organizationEntries | Group-Object "Site URL"
                 $sites = $siteGroups | ForEach-Object { [PSCustomObject]@{ URL = $_.Name } }
                 
-                # Auto-enable conversion when using CSV output
-                if (-not $convertOrganizationLinks) {
-                    Write-Host "Auto-enabling Organization link conversion for CSV input mode" -ForegroundColor Green
+                # Auto-enable remediation when using CSV output
+                if ($Mode -eq "Detection") {
+                    Write-Host "Auto-enabling Remediation mode for CSV input containing Organization links" -ForegroundColor Green
+                    $Mode = "Remediation"
                     $convertOrganizationLinks = $true
+                    $RemoveSharingLink = $true
                     $cleanupCorruptedSharingGroups = $true
                     
                     # Update the script mode to reflect the change
                     $scriptMode = "REMEDIATION"
                     Write-Host "Updated script mode to $scriptMode" -ForegroundColor Yellow
-                    Write-InfoLog -LogName $Log -LogEntryText "Auto-enabled remediation mode and cleanup for CSV input containing Organization links"
+                    Write-InfoLog -LogName $Log -LogEntryText "Auto-enabled remediation mode for CSV input containing Organization links"
                 }
                 
                 Write-Host "Found $($sites.Count) sites with Organization sharing links for remediation" -ForegroundColor Green
@@ -436,7 +427,7 @@ $siteCollectionData = @{}
 # ----------------------------------------------
 # Initialize the sharing links output file with headers
 # ----------------------------------------------
-$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,Sharing Link URL,Link Expiration Date,IsTeamsConnected,SharingCapability,Last Content Modified,Link Removed"
+$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,Filename,SharingType,Sharing Link URL,Link Expiration Date,IsTeamsConnected,SharingCapability,Last Content Modified,Link Removed"
 Set-Content -Path $sharingLinksOutputFile -Value $sharingLinksHeaders
 Write-InfoLog -LogName $Log -LogEntryText "Initialized sharing links output file: $sharingLinksOutputFile"
 
@@ -554,19 +545,66 @@ Function Write-SiteSharingLinks {
                 # Get document details if available
                 $documentUrl = "Not found"
                 $documentOwner = "Not found"
+                $documentItemType = "Not found"
                 $sharingLinkUrl = "Not found"
                 $linkExpirationDate = "Not found"
                 if ($SiteData.ContainsKey("DocumentDetails") -and $SiteData["DocumentDetails"].ContainsKey($sharingGroup)) {
                     $documentUrl = $SiteData["DocumentDetails"][$sharingGroup]["DocumentUrl"]
                     $documentOwner = $SiteData["DocumentDetails"][$sharingGroup]["DocumentOwner"]
+                    $documentItemType = $SiteData["DocumentDetails"][$sharingGroup]["DocumentItemType"]
                     $sharingLinkUrl = $SiteData["DocumentDetails"][$sharingGroup]["SharingLinkUrl"]
                     $linkExpirationDate = $SiteData["DocumentDetails"][$sharingGroup]["ExpirationDate"]
+                    Write-DebugLog -LogName $Log -LogEntryText "Retrieved document details for $sharingGroup - URL: $documentUrl, Owner: $documentOwner, Type: $documentItemType, LinkURL: $sharingLinkUrl, Expiration: $linkExpirationDate"
+                }
+                else {
+                    Write-DebugLog -LogName $Log -LogEntryText "No document details found for sharing group: $sharingGroup. DocumentDetails exists: $($SiteData.ContainsKey('DocumentDetails')), Group key exists: $(if ($SiteData.ContainsKey('DocumentDetails')) { $SiteData['DocumentDetails'].ContainsKey($sharingGroup) } else { 'N/A' })"
                 }
                 
                 # Get link removal status
                 $linkRemoved = "False"
                 if ($SiteData.ContainsKey("Link Removal Status") -and $SiteData["Link Removal Status"].ContainsKey($sharingGroup)) {
                     $linkRemoved = if ($SiteData["Link Removal Status"][$sharingGroup]) { "True" } else { "False" }
+                }
+                
+                # Extract filename from the document URL
+                $filename = "Not found"
+                if ($documentUrl -ne "Not found" -and -not [string]::IsNullOrWhiteSpace($documentUrl)) {
+                    try {
+                        if ($documentUrl -match "DispForm\.aspx\?ID=(\d+)") {
+                            # This is a list item - try to get a meaningful name
+                            # For list items, we'll use "List Item" + ID as the filename
+                            $itemId = $matches[1]
+                            $filename = "List Item $itemId"
+                            
+                            # Try to extract list name for better context
+                            if ($documentUrl -match "/Lists/([^/]+)/DispForm\.aspx") {
+                                $listName = $matches[1]
+                                $filename = "$listName - Item $itemId"
+                            }
+                        }
+                        else {
+                            # This is a regular file - extract filename from URL
+                            $uri = [System.Uri]$documentUrl
+                            $pathParts = $uri.AbsolutePath.Split('/')
+                            $filename = $pathParts[$pathParts.Length - 1]
+                            
+                            # Decode URL encoding if present
+                            $filename = [System.Web.HttpUtility]::UrlDecode($filename)
+                        }
+                    }
+                    catch {
+                        Write-DebugLog -LogName $Log -LogEntryText "Could not extract filename from URL: $documentUrl. Error: $_"
+                        $filename = "Extraction Error"
+                    }
+                }
+                
+                # Determine sharing type based on sharing group name
+                $sharingType = "Unknown"
+                if ($sharingGroup -like "*Flexible*") {
+                    $sharingType = "Flexible"
+                }
+                elseif ($sharingGroup -like "*Organization*") {
+                    $sharingType = "Organization"
                 }
                 
                 # Create CSV line
@@ -580,6 +618,8 @@ Function Write-SiteSharingLinks {
                     "Sharing Link Members"  = $membersFormatted
                     "File URL"              = $documentUrl
                     "File Owner"            = $documentOwner
+                    "Filename"              = $filename
+                    "SharingType"           = $sharingType
                     "Sharing Link URL"      = $sharingLinkUrl
                     "Link Expiration Date"  = $linkExpirationDate
                     "IsTeamsConnected"      = $SiteData.IsTeamsConnected
@@ -599,6 +639,12 @@ Function Write-SiteSharingLinks {
 # ----------------------------------------------
 # Function to convert Organization sharing links to direct permissions
 # ----------------------------------------------
+# ----------------------------------------------
+# Function to convert Organization sharing links to direct permissions
+# ----------------------------------------------
+# ----------------------------------------------
+# Function to convert Organization sharing links to direct permissions
+# ----------------------------------------------
 Function Convert-OrganizationSharingLinks {
     param(
         [Parameter(Mandatory = $true)]
@@ -611,14 +657,6 @@ Function Convert-OrganizationSharingLinks {
     try {
         # Connect to the specific site
         Connect-PnPOnline -Url $SiteUrl @connectionParams -ErrorAction Stop
-        
-        # First, clean up any corrupted sharing groups if enabled
-        if ($cleanupCorruptedSharingGroups) {
-            Remove-CorruptedSharingGroups -SiteUrl $SiteUrl
-        }
-        else {
-            Write-DebugLog -LogName $Log -LogEntryText "Skipping corrupted sharing groups cleanup as it's disabled"
-        }
         
         # Get all SharePoint groups that contain "Organization" in the name
         $organizationGroups = Invoke-WithThrottleHandling -ScriptBlock {
@@ -672,65 +710,15 @@ Function Convert-OrganizationSharingLinks {
                 $documentId = $matches[1]
                 Write-DebugLog -LogName $Log -LogEntryText "Extracted document ID: $documentId from group: $groupName"
                 
-                # Try to find the document using Microsoft Graph
-                try {
-                    $graphToken = Invoke-WithThrottleHandling -ScriptBlock {
-                        Get-PnPAccessToken
-                    } -Operation "Get-PnPAccessToken for document search"
-                    
-                    if ($graphToken) {
-                        $headers = @{
-                            "Authorization" = "Bearer $graphToken"
-                            "Content-Type"  = "application/json"
-                        }
-                        
-                        $searchQuery = @{
-                            requests = @(
-                                @{
-                                    entityTypes               = @("driveItem")
-                                    query                     = @{
-                                        queryString = "UniqueID:$documentId"
-                                    }
-                                    from                      = 0
-                                    size                      = 25
-                                    sharePointOneDriveOptions = @{
-                                        includeContent = "sharedContent,privateContent"
-                                    }
-                                    region                    = $searchRegion
-                                }
-                            )
-                        }
-                        
-                        $searchBody = $searchQuery | ConvertTo-Json -Depth 5
-                        $searchUrl = "https://graph.microsoft.com/v1.0/search/query"
-                        
-                        $searchResults = Invoke-WithThrottleHandling -ScriptBlock {
-                            Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Post -Body $searchBody
-                        } -Operation "Microsoft Graph Search for document ID $documentId"
-                        
-                        if ($searchResults.value -and 
-                            $searchResults.value[0].hitsContainers -and 
-                            $searchResults.value[0].hitsContainers[0].hits -and 
-                            $searchResults.value[0].hitsContainers[0].hits.Count -gt 0) {
-                            
-                            $hit = $searchResults.value[0].hitsContainers[0].hits[0]
-                            $resource = $hit.resource
-                            
-                            if ($resource -and $resource.webUrl) {
-                                $documentUrl = $resource.webUrl
-                                Write-DebugLog -LogName $Log -LogEntryText "Found document URL: $documentUrl"
-                            }
-                            else {
-                                Write-DebugLog -LogName $Log -LogEntryText "Document found but no webUrl property available"
-                            }
-                        }
-                        else {
-                            Write-DebugLog -LogName $Log -LogEntryText "No search results found for document ID: $documentId"
-                        }
-                    }
+                # Try to find the document using existing site collection data first
+                if ($siteCollectionData[$SiteUrl].ContainsKey("DocumentDetails") -and 
+                    $siteCollectionData[$SiteUrl]["DocumentDetails"].ContainsKey($groupName) -and
+                    -not [string]::IsNullOrWhiteSpace($siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["DocumentUrl"])) {
+                    $documentUrl = $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["DocumentUrl"]
+                    Write-DebugLog -LogName $Log -LogEntryText "Found document URL: $documentUrl"
                 }
-                catch {
-                    Write-DebugLog -LogName $Log -LogEntryText "Error searching for document via Graph API: $_"
+                else {
+                    Write-DebugLog -LogName $Log -LogEntryText "No document URL found in site collection data for group: $groupName"
                 }
             }
             else {
@@ -745,7 +733,7 @@ Function Convert-OrganizationSharingLinks {
                 Write-DebugLog -LogName $Log -LogEntryText "Will attempt document-level permissions for: $documentUrl"
             }
             
-            # Process each member
+            # Process each member using the WORKING approach from GitHub script
             foreach ($member in $groupMembers) {
                 if (!$member -or !$member.LoginName) { continue }
                 
@@ -753,7 +741,7 @@ Function Convert-OrganizationSharingLinks {
                     Write-Host "        Processing member: $($member.Title)" -ForegroundColor White
                     Write-DebugLog -LogName $Log -LogEntryText "Processing member: $($member.Title) ($($member.LoginName))"
                     
-                    # Remove user from the sharing group
+                    # STEP 1: Remove user from the sharing group FIRST (key difference from the broken version)
                     $memberRemovalSuccess = $false
                     try {
                         Invoke-WithThrottleHandling -ScriptBlock {
@@ -781,7 +769,7 @@ Function Convert-OrganizationSharingLinks {
                         Write-DebugLog -LogName $Log -LogEntryText "Continuing to process permissions for $($member.LoginName) despite removal failure"
                     }
                     
-                    # Grant direct permissions to the document if we found it
+                    # STEP 2: Grant direct permissions to the document if we found it
                     if (-not [string]::IsNullOrWhiteSpace($documentUrl)) {
                         try {
                             # Parse the document URL to get the relative URL
@@ -794,197 +782,103 @@ Function Convert-OrganizationSharingLinks {
                                 throw "Invalid document URL - empty relative path"
                             }
                             
-                            Write-DebugLog -LogName $Log -LogEntryText "Attempting to grant permissions for document at: $relativePath"
+                            Write-DebugLog -LogName $Log -LogEntryText "Attempting to grant permissions for document URL: $documentUrl"
+                            Write-DebugLog -LogName $Log -LogEntryText "Parsed relative path: $relativePath"
                             
-                            # Try CSOM method first (since it's working)
-                            try {
-                                Invoke-WithThrottleHandling -ScriptBlock {
-                                    # Get the file and break inheritance
-                                    $file = Get-PnPFile -Url $relativePath
-                                    $listItem = $file.ListItemAllFields
-                                    $listItem.BreakRoleInheritance($false, $true)
-                                    $listItem.Context.Load($listItem)
-                                    $listItem.Context.ExecuteQuery()
-                                    
-                                    # Get the role definition and user
-                                    $roleDefinition = Get-PnPRoleDefinition -Identity $permissionLevel
-                                    $user = Get-PnPUser -Identity $member.LoginName
-                                    
-                                    # Create role definition binding collection
-                                    $roleBindings = New-Object Microsoft.SharePoint.Client.RoleDefinitionBindingCollection($listItem.Context)
-                                    $roleBindings.Add($roleDefinition)
-                                    
-                                    # Create role assignment
-                                    $roleAssignment = $listItem.RoleAssignments.Add($user, $roleBindings)
-                                    $listItem.Context.Load($roleAssignment)
-                                    $listItem.Context.ExecuteQuery()
-                                } -Operation "Grant $permissionLevel permission using CSOM with proper binding collection"
+                            # Check if this is a SharePoint list item (with DispForm.aspx) vs a document library file
+                            # Note: Need to check the full URL, not just the path, for DispForm.aspx pattern
+                            if ($documentUrl -match "DispForm\.aspx\?ID=(\d+)" -or $relativePath -match "DispForm\.aspx\?ID=(\d+)") {
+                                # This is a SharePoint list item - handle it differently
+                                $itemId = $matches[1]
+                                Write-DebugLog -LogName $Log -LogEntryText "Detected SharePoint list item with ID: $itemId from URL: $documentUrl"
                                 
-                                Write-Host "          Granted direct $permissionLevel permission to document (CSOM method)" -ForegroundColor Green
-                                Write-InfoLog -LogName $Log -LogEntryText "Granted direct $permissionLevel permission to $($member.LoginName) for document using CSOM: $documentUrl"
-                            }
-                            catch {
-                                $csomLastError = $_.Exception.Message
-                                Write-DebugLog -LogName $Log -LogEntryText "CSOM method failed: $csomLastError"
-                                # Fallback 1: Try to get the file and set permissions with better list handling
-                                try {
-                                    Write-DebugLog -LogName $Log -LogEntryText "Attempting PnP method for $relativePath"
+                                # Extract list name from the URL path - improved logic
+                                $listName = ""
+                                
+                                # Try different patterns to extract the list name
+                                if ($documentUrl -match "/Lists/([^/]+)/DispForm\.aspx") {
+                                    $listName = $matches[1]
+                                    Write-DebugLog -LogName $Log -LogEntryText "Extracted list name from /Lists/ pattern: $listName"
+                                }
+                                elseif ($documentUrl -match "/sites/[^/]+/([^/]+)/DispForm\.aspx") {
+                                    $listName = $matches[1]
+                                    Write-DebugLog -LogName $Log -LogEntryText "Extracted list name from site pattern: $listName"
+                                }
+                                else {
+                                    # Fallback: parse the path manually
+                                    $pathParts = $relativePath.Split('/')
                                     
-                                    # Get the file with list information
-                                    $file = Invoke-WithThrottleHandling -ScriptBlock {
-                                        Get-PnPFile -Url $relativePath -AsListItem -ErrorAction SilentlyContinue
-                                    } -Operation "Get file as list item for $relativePath"
-                                    
-                                    # Try multiple ways to get the list
-                                    $targetList = $null
-                                    
-                                    if ($file -and $file.ParentList -and $file.ParentList.Id) {
-                                        $targetList = $file.ParentList
-                                        Write-DebugLog -LogName $Log -LogEntryText "Found parent list from file: $($targetList.Title)"
-                                    }
-                                    elseif ($file) {
-                                        Write-DebugLog -LogName $Log -LogEntryText "File found but ParentList is null, trying to resolve list manually"
-                                        
-                                        # Try to get list from the file path
-                                        $pathParts = $relativePath.TrimStart('/').Split('/')
-                                        
-                                        # Try different potential list names from the path
-                                        $potentialListNames = @()
-                                        if ($pathParts.Length -gt 1) {
-                                            $potentialListNames += $pathParts[1] # Second part (after site)
-                                        }
-                                        if ($pathParts.Length -gt 2) {
-                                            $potentialListNames += $pathParts[2] # Third part
-                                        }
-                                        
-                                        # Add common library names
-                                        $potentialListNames += @("Documents", "Shared Documents", "Site Assets")
-                                        
-                                        foreach ($listName in $potentialListNames) {
-                                            try {
-                                                $targetList = Get-PnPList -Identity $listName -ErrorAction SilentlyContinue
-                                                if ($targetList) {
-                                                    Write-DebugLog -LogName $Log -LogEntryText "Successfully resolved list: $($targetList.Title)"
-                                                    break
-                                                }
+                                    # Find the part before 'DispForm.aspx'
+                                    for ($i = 0; $i -lt $pathParts.Length; $i++) {
+                                        if ($pathParts[$i] -eq "DispForm.aspx") {
+                                            if ($i -gt 0) {
+                                                $listName = $pathParts[$i - 1]
+                                                Write-DebugLog -LogName $Log -LogEntryText "Extracted list name from path parsing: $listName"
                                             }
-                                            catch {
-                                                continue
-                                            }
+                                            break
                                         }
-                                    }
-                                    else {
-                                        Write-DebugLog -LogName $Log -LogEntryText "Could not retrieve file as list item"
-                                    }
-                                    
-                                    if ($targetList -and $file -and $file.Id) {
-                                        # Grant direct permissions to the file
-                                        Invoke-WithThrottleHandling -ScriptBlock {
-                                            Set-PnPListItemPermission -List $targetList.Id -Identity $file.Id -User $member.LoginName -AddRole $permissionLevel
-                                        } -Operation "Grant $permissionLevel permission to $($member.LoginName) for document"
-                                        
-                                        Write-Host "          Granted direct $permissionLevel permission to document (PnP method)" -ForegroundColor Green
-                                        Write-InfoLog -LogName $Log -LogEntryText "Granted direct $permissionLevel permission to $($member.LoginName) for document: $documentUrl"
-                                    }
-                                    else {
-                                        $errorDetails = @()
-                                        if (-not $targetList) { $errorDetails += "no target list" }
-                                        if (-not $file) { $errorDetails += "no file" }
-                                        elseif (-not $file.Id) { $errorDetails += "file has no ID" }
-                                        throw "Could not proceed with PnP method: $($errorDetails -join ', ')"
                                     }
                                 }
-                                catch {
-                                    $pnpLastError = $_.Exception.Message
-                                    Write-DebugLog -LogName $Log -LogEntryText "PnP method failed: $pnpLastError"
+                                
+                                if (-not [string]::IsNullOrWhiteSpace($listName)) {
+                                    Write-DebugLog -LogName $Log -LogEntryText "Attempting to grant permissions to list item - List: '$listName', Item ID: $itemId"
                                     
-                                    # Fallback 2: List search approach
                                     try {
-                                        Write-DebugLog -LogName $Log -LogEntryText "Attempting list search method for $relativePath"
-                                        
+                                        # Use PnP to grant permissions directly to the list item
                                         Invoke-WithThrottleHandling -ScriptBlock {
-                                            # Try to get the list from the file URL and use list-level permissions
-                                            $pathParts = $relativePath.TrimStart('/').Split('/')
-                                            $possibleListNames = @()
-                                            
-                                            # Try to extract list name from path (more comprehensive approach)
-                                            if ($pathParts.Length -gt 1) {
-                                                $possibleListNames += $pathParts[1] # Usually the library name
-                                            }
-                                            if ($pathParts.Length -gt 2) {
-                                                $possibleListNames += $pathParts[2] # Alternative position
-                                            }
-                                            
-                                            # Try common document library names
-                                            $possibleListNames += @("Documents", "Shared Documents", "Site Assets", "SiteAssets")
-                                            
-                                            $permissionGranted = $false
-                                            $fileName = [System.IO.Path]::GetFileName($relativePath)
-                                            
-                                            Write-DebugLog -LogName $Log -LogEntryText "Searching for file '$fileName' in lists: $($possibleListNames -join ', ')"
-                                            
-                                            foreach ($listName in $possibleListNames) {
-                                                try {
-                                                    $list = Get-PnPList -Identity $listName -ErrorAction SilentlyContinue
-                                                    if ($list) {
-                                                        Write-DebugLog -LogName $Log -LogEntryText "Found list: $($list.Title), searching for file"
-                                                        
-                                                        # Try multiple approaches to find the file
-                                                        $listItems = $null
-                                                        
-                                                        # Approach 1: Search by file name
-                                                        try {
-                                                            $listItems = Get-PnPListItem -List $list -Query "<View><Query><Where><Eq><FieldRef Name='FileLeafRef'/><Value Type='File'>$fileName</Value></Eq></Where></Query></View>" -ErrorAction SilentlyContinue
-                                                        }
-                                                        catch {
-                                                            Write-DebugLog -LogName $Log -LogEntryText "File search by name failed in $($list.Title): $_"
-                                                        }
-                                                        
-                                                        # Approach 2: Try without the XML query if that failed
-                                                        if (-not $listItems -or $listItems.Count -eq 0) {
-                                                            try {
-                                                                $allItems = Get-PnPListItem -List $list -ErrorAction SilentlyContinue
-                                                                $listItems = $allItems | Where-Object { $_.FieldValues.FileLeafRef -eq $fileName }
-                                                            }
-                                                            catch {
-                                                                Write-DebugLog -LogName $Log -LogEntryText "Alternative file search failed in $($list.Title): $_"
-                                                            }
-                                                        }
-                                                        
-                                                        if ($listItems -and $listItems.Count -gt 0) {
-                                                            $listItem = if ($listItems -is [array]) { $listItems[0] } else { $listItems }
-                                                            Set-PnPListItemPermission -List $list.Id -Identity $listItem.Id -User $member.LoginName -AddRole $permissionLevel
-                                                            $permissionGranted = $true
-                                                            Write-InfoLog -LogName $Log -LogEntryText "Found and granted permissions to file in list: $($list.Title)"
-                                                            break
-                                                        }
-                                                        else {
-                                                            Write-DebugLog -LogName $Log -LogEntryText "File not found in list: $($list.Title)"
-                                                        }
-                                                    }
-                                                    else {
-                                                        Write-DebugLog -LogName $Log -LogEntryText "List not found: $listName"
-                                                    }
-                                                }
-                                                catch {
-                                                    Write-DebugLog -LogName $Log -LogEntryText "Error processing list '$listName': $_"
-                                                    continue
-                                                }
-                                            }
-                                            
-                                            if (-not $permissionGranted) {
-                                                throw "Could not locate the file '$fileName' in any of the searched document libraries: $($possibleListNames -join ', ')"
-                                            }
-                                        } -Operation "Grant $permissionLevel permission using list search approach"
+                                            Set-PnPListItemPermission -List $listName -Identity $itemId -User $member.LoginName -AddRole $permissionLevel
+                                        } -Operation "Grant $permissionLevel permission to $($member.LoginName) for list item"
                                         
-                                        Write-Host "          Granted direct $permissionLevel permission to document (list search method)" -ForegroundColor Green
-                                        Write-InfoLog -LogName $Log -LogEntryText "Granted direct $permissionLevel permission to $($member.LoginName) for document using list search: $documentUrl"
+                                        Write-Host "          Granted direct $permissionLevel permission to list item (List: $listName, ID: $itemId)" -ForegroundColor Green
+                                        Write-InfoLog -LogName $Log -LogEntryText "Granted direct $permissionLevel permission to $($member.LoginName) for list item: $documentUrl"
                                     }
                                     catch {
-                                        $lastError = $_.Exception.Message
-                                        Write-DebugLog -LogName $Log -LogEntryText "List search method failed: $lastError"
-                                        throw "All document-level permission approaches failed. CSOM: $csomLastError, PnP: $pnpLastError, List search: $lastError"
+                                        Write-DebugLog -LogName $Log -LogEntryText "Direct list item permission failed for list '$listName', item ID '$itemId': $($_.Exception.Message)"
+                                        throw "Could not grant permissions to list item '$listName' (ID: $itemId): $($_.Exception.Message)"
                                     }
+                                }
+                                else {
+                                    $errorMsg = "Could not extract list name from SharePoint list item URL: $documentUrl (relative path: $relativePath)"
+                                    Write-DebugLog -LogName $Log -LogEntryText $errorMsg
+                                    throw $errorMsg
+                                }
+                            }
+                            else {
+                                # This is a document library file - try to grant permissions to the file
+                                Write-DebugLog -LogName $Log -LogEntryText "Processing as document library file"
+                                
+                                try {
+                                    Invoke-WithThrottleHandling -ScriptBlock {
+                                        # Get the file and break inheritance
+                                        $file = Get-PnPFile -Url $relativePath
+                                        $listItem = $file.ListItemAllFields
+                                        $listItem.BreakRoleInheritance($false, $true)
+                                        $listItem.Context.Load($listItem)
+                                        $listItem.Context.ExecuteQuery()
+                                        
+                                        # Get the role definition and user
+                                        $roleDefinition = Get-PnPRoleDefinition -Identity $permissionLevel
+                                        $user = Get-PnPUser -Identity $member.LoginName
+                                        
+                                        # Create role definition binding collection
+                                        $roleBindings = New-Object Microsoft.SharePoint.Client.RoleDefinitionBindingCollection($listItem.Context)
+                                        $roleBindings.Add($roleDefinition)
+                                        
+                                        # Create role assignment
+                                        $roleAssignment = $listItem.RoleAssignments.Add($user, $roleBindings)
+                                        $listItem.Context.Load($roleAssignment)
+                                        $listItem.Context.ExecuteQuery()
+                                    } -Operation "Grant $permissionLevel permission using CSOM with proper binding collection"
+                                    
+                                    Write-Host "          Granted direct $permissionLevel permission to document (CSOM method)" -ForegroundColor Green
+                                    Write-InfoLog -LogName $Log -LogEntryText "Granted direct $permissionLevel permission to $($member.LoginName) for document using CSOM: $documentUrl"
+                                }
+                                catch {
+                                    $csomLastError = $_.Exception.Message
+                                    Write-DebugLog -LogName $Log -LogEntryText "CSOM method failed: $csomLastError"
+                                    
+                                    # Fallback: Grant permissions at site level
+                                    throw "CSOM failed, falling back to site-level permissions"
                                 }
                             }
                         }
@@ -1031,12 +925,12 @@ Function Convert-OrganizationSharingLinks {
                 }
             }
             
-            # Properly remove the sharing link using UnshareLink method
-            Write-Host "      Removing Organization sharing link: $groupName" -ForegroundColor Yellow
-            Write-DebugLog -LogName $Log -LogEntryText "Attempting to properly remove Organization sharing link: $groupName"
+            # STEP 3: Always remove empty Organization sharing groups (critical for list items)
+            Write-Host "      Checking if Organization sharing group is empty: $groupName" -ForegroundColor Yellow
+            Write-DebugLog -LogName $Log -LogEntryText "Checking if Organization sharing group is empty after member removal: $groupName"
             
             try {
-                # First verify the group is empty before removing
+                # Check if the group is empty after removing members
                 $remainingMembers = Invoke-WithThrottleHandling -ScriptBlock {
                     Get-PnPGroupMember -Identity $orgGroup.Id -ErrorAction SilentlyContinue
                 } -Operation "Check remaining members in Organization group $groupName"
@@ -1046,266 +940,415 @@ Function Convert-OrganizationSharingLinks {
                     Write-Host "      Warning: Group still has members, skipping removal" -ForegroundColor Yellow
                 }
                 else {
-                    # Group is empty, safe to remove the sharing link properly
-                    $sharingLinkRemoved = $false
+                    # Group is empty - remove it to prevent corruption (especially important for list items)
+                    Write-Host "      Removing empty Organization sharing group: $groupName" -ForegroundColor Green
+                    Write-InfoLog -LogName $Log -LogEntryText "Attempting to remove empty Organization sharing group: $groupName"
                     
-                    # Try to remove using UnshareLink if we have document details
-                    if ($documentUrl -and $documentId) {
-                        try {
-                            Write-DebugLog -LogName $Log -LogEntryText "Attempting to unshare link using PnP PowerShell methods"
-                            
-                            $result = Invoke-WithThrottleHandling -ScriptBlock {
-                                # Parse document URL to get relative path
-                                $uri = [System.Uri]$documentUrl
-                                $relativePath = $uri.AbsolutePath
-                                $linkRemoved = $false
+                    try {
+                        Invoke-WithThrottleHandling -ScriptBlock {
+                            # First check if group still exists
+                            $groupCheck = Get-PnPGroup -Identity $orgGroup.Id -ErrorAction SilentlyContinue
+                            if ($groupCheck) {
+                                Remove-PnPGroup -Identity $orgGroup.Id -Force
+                                Write-Host "        Successfully removed empty Organization sharing group: $groupName" -ForegroundColor Green
+                                Write-InfoLog -LogName $Log -LogEntryText "Successfully removed empty Organization sharing group: $groupName"
+                            }
+                            else {
+                                Write-LogEntry -LogName $Log -LogEntryText "Group $groupName no longer exists, may have already been removed" -Level "INFO"
+                                Write-Host "        Group no longer exists (may have already been removed)" -ForegroundColor Yellow
+                            }
+                        } -Operation "Remove empty Organization sharing group $groupName"
+                        
+                        Update-LinkRemovalStatus -SiteUrl $SiteUrl -SharingGroupName $groupName -WasRemoved $true
+                    }
+                    catch {
+                        Write-Host "        Warning: Could not remove sharing group $groupName : $_" -ForegroundColor Red
+                        Write-ErrorLog -LogName $Log -LogEntryText "Failed to remove sharing group $groupName : $_"
+                        Update-LinkRemovalStatus -SiteUrl $SiteUrl -SharingGroupName $groupName -WasRemoved $false
+                    }
+                }
+            }
+            catch {
+                Write-Host "      Warning: Error checking/removing Organization sharing group $groupName : $_" -ForegroundColor Red
+                Write-ErrorLog -LogName $Log -LogEntryText "Error checking/removing Organization sharing group $groupName : $_"
+                Update-LinkRemovalStatus -SiteUrl $SiteUrl -SharingGroupName $groupName -WasRemoved $false
+            }
+            
+            # STEP 4: Optional sharing link removal (for documents only)
+            if ($RemoveSharingLink) {
+                Write-Host "      Attempting optional sharing link removal: $groupName" -ForegroundColor Cyan
+                Write-DebugLog -LogName $Log -LogEntryText "Attempting optional sharing link removal: $groupName"
+                
+                try {
+                    # First verify the group is empty before removing
+                    $remainingMembers = Invoke-WithThrottleHandling -ScriptBlock {
+                        Get-PnPGroupMember -Identity $orgGroup.Id -ErrorAction SilentlyContinue
+                    } -Operation "Check remaining members in Organization group $groupName"
+                    
+                    if ($remainingMembers -and $remainingMembers.Count -gt 0) {
+                        Write-LogEntry -LogName $Log -LogEntryText "Warning: Group $groupName still has $($remainingMembers.Count) members, will not remove" -Level "INFO"
+                        Write-Host "      Warning: Group still has members, skipping removal" -ForegroundColor Yellow
+                    }
+                    else {
+                        # Group is empty, safe to remove the sharing link properly
+                        $sharingLinkRemoved = $false
+                        
+                        # Try to remove using UnshareLink if we have document details
+                        if ($documentUrl -and $documentId) {
+                            try {
+                                Write-DebugLog -LogName $Log -LogEntryText "Attempting to unshare link using PnP PowerShell methods"
                                 
-                                # Try PnP's Get-PnPFileSharingLink and Remove-PnPFileSharingLink first
-                                try {
-                                    $file = Get-PnPFile -Url $relativePath
+                                $result = Invoke-WithThrottleHandling -ScriptBlock {
+                                    # Parse document URL to get relative path
+                                    $uri = [System.Uri]$documentUrl
+                                    $relativePath = $uri.AbsolutePath
+                                    $linkRemoved = $false
                                     
-                                    # Get all sharing links for this file using the correct parameter
-                                    $sharingLinks = Get-PnPFileSharingLink -Identity $relativePath
-                                    
-                                    # Log the structure of the sharing links for debugging
-                                    if ($debugLogging -and $sharingLinks -and $sharingLinks.Count -gt 0) {
-                                        $firstLink = $sharingLinks[0]
-                                        Write-DebugLog -LogName $Log -LogEntryText "Sharing link object properties: $(($firstLink | Get-Member -MemberType Property).Name -join ', ')"
+                                    # Check if this is a list item (DispForm.aspx) or a regular file
+                                    # Note: Need to check the full URL, not just the path, for DispForm.aspx pattern
+                                    if ($documentUrl -match "DispForm\.aspx\?ID=(\d+)" -or $relativePath -match "DispForm\.aspx\?ID=(\d+)") {
+                                        # This is a list item - we need to use the document ID directly
+                                        Write-DebugLog -LogName $Log -LogEntryText "Detected list item, using document ID $documentId for sharing link operations. Full URL: $documentUrl"
                                         
-                                        if ($firstLink.link) {
-                                            Write-DebugLog -LogName $Log -LogEntryText "Link property exists. Link properties: $(($firstLink.link | Get-Member -MemberType Property).Name -join ', ')"
-                                            if ($firstLink.link.WebUrl) {
-                                                Write-DebugLog -LogName $Log -LogEntryText "WebUrl found: $($firstLink.link.WebUrl)"
-                                            }
-                                        }
-                                        else {
-                                            Write-DebugLog -LogName $Log -LogEntryText "Link property doesn't exist or is null"
-                                        }
-                                    }
-                                    
-                                    foreach ($sharingLink in $sharingLinks) {
-                                        # Try to match the sharing link with our group
-                                        if ($sharingLink.Id -and $groupName -like "*$($sharingLink.Id)*") {
-                                            Write-LogEntry -LogName $Log -LogEntryText "Found matching sharing link with ID: $($sharingLink.Id)" -Level "INFO"
-                                            
-                                            # Store the sharing link URL if we have document details
-                                            if ($siteCollectionData[$SiteUrl].ContainsKey("DocumentDetails") -and 
-                                                $siteCollectionData[$SiteUrl]["DocumentDetails"].ContainsKey($groupName)) {
-                                                
-                                                # Get the WebUrl property of the sharing link from the link property
-                                                $sharingLinkUrl = if ($sharingLink.link -and $sharingLink.link.WebUrl) { 
-                                                    $sharingLink.link.WebUrl 
-                                                }
-                                                else { 
-                                                    "Not found" 
-                                                }
-                                                
-                                                # Get the expiration date of the sharing link
-                                                $expirationDate = "No expiration"
-                                                if ($sharingLink.link -and $sharingLink.link.ExpirationDateTime) {
-                                                    # Format the expiration date to a readable format
-                                                    try {
-                                                        $expDate = [DateTime]::Parse($sharingLink.link.ExpirationDateTime)
-                                                        $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
-                                                    }
-                                                    catch {
-                                                        $expirationDate = $sharingLink.link.ExpirationDateTime
-                                                        Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($sharingLink.link.ExpirationDateTime)"
-                                                    }
-                                                }
-                                                elseif ($sharingLink.ExpirationDateTime) {
-                                                    # Alternative location for expiration date
-                                                    try {
-                                                        $expDate = [DateTime]::Parse($sharingLink.ExpirationDateTime)
-                                                        $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
-                                                    }
-                                                    catch {
-                                                        $expirationDate = $sharingLink.ExpirationDateTime
-                                                        Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($sharingLink.ExpirationDateTime)"
-                                                    }
-                                                }
-                                                
-                                                $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
-                                                $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["ExpirationDate"] = $expirationDate
-                                                
-                                                Write-InfoLog -LogName $Log -LogEntryText "Stored sharing link URL for group $groupName - URL: $sharingLinkUrl, Expiration: $expirationDate"
-                                            }
-                                            
-                                            # Only remove the sharing link if RemoveSharingLink is true
-                                            if ($RemoveSharingLink) {
-                                                # Remove the sharing link using the file URL and sharing link ID
-                                                Remove-PnPFileSharingLink -FileUrl $relativePath -Id $sharingLink.Id -Force
-                                                
-                                                Write-Host "        Successfully removed sharing link using PnP methods" -ForegroundColor Green
-                                                Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing link with ID: $($sharingLink.Id)"
-                                                $linkRemoved = $true
-                                            }
-                                            else {
-                                                Write-Host "        Preserving sharing link as requested (RemoveSharingLink = $false)" -ForegroundColor Cyan
-                                                Write-InfoLog -LogName $Log -LogEntryText "Preserved sharing link with ID: $($sharingLink.Id) (RemoveSharingLink = $false)"
-                                                $linkRemoved = $true  # Mark as processed even though we didn't actually remove it
-                                            }
-                                            break
-                                        }
-                                    }
-                                }
-                                catch {
-                                    Write-LogEntry -LogName $Log -LogEntryText "PnP sharing link methods failed: $_" -Level "DEBUG"
-                                    
-                                    # Try alternative PnP approach - remove all sharing links for the file
-                                    try {
-                                        Write-DebugLog -LogName $Log -LogEntryText "Attempting to remove all sharing links for the file"
-                                        
-                                        # Use Set-PnPFileSharing -DisableSharing
-                                        Set-PnPFileSharing -Url $relativePath -RemoveSharing
-                                        
-                                        Write-Host "        Successfully removed sharing using Set-PnPFileSharing" -ForegroundColor Green
-                                        Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing using Set-PnPFileSharing"
-                                        $linkRemoved = $true
-                                    }
-                                    catch {
-                                        Write-LogEntry -LogName $Log -LogEntryText "Set-PnPFileSharing also failed: $_" -Level "DEBUG"
-                                        
-                                        # Try CSOM approach with proper SharePoint Client methods
                                         try {
-                                            Write-DebugLog -LogName $Log -LogEntryText "Attempting CSOM approach with SharePoint Client methods"
+                                            # For list items, try to get sharing links using the document ID directly
+                                            Write-DebugLog -LogName $Log -LogEntryText "Attempting to get sharing links for list item with document ID: $documentId"
                                             
-                                            # Get the web and file context
-                                            $web = Get-PnPWeb
-                                            $ctx = $web.Context
+                                            $sharingLinks = Invoke-WithThrottleHandling -ScriptBlock {
+                                                Get-PnPFileSharingLink -Identity $documentId -ErrorAction SilentlyContinue
+                                            } -Operation "Get sharing links for list item with document ID $documentId"
                                             
-                                            # Get the file
-                                            $file = $web.GetFileByServerRelativeUrl($relativePath)
-                                            $ctx.Load($file)
-                                            $ctx.ExecuteQuery()
-                                            
-                                            # Get the list item
-                                            $listItem = $file.ListItemAllFields
-                                            $ctx.Load($listItem)
-                                            $ctx.ExecuteQuery()
-                                            
-                                            # Load Microsoft.SharePoint.Client.Sharing namespace
-                                            # Find the DLL using a more robust approach
-                                            $moduleBase = Get-Module PnP.PowerShell | Select-Object -ExpandProperty ModuleBase
-                                            $dllPath = $null
-                                            
-                                            # Try multiple possible locations
-                                            $possiblePaths = @(
-                                                # Check directly in ModuleBase
-                                                [System.IO.Path]::Combine($moduleBase, "Microsoft.SharePoint.Client.dll"),
-                                                # Check in Core subdirectory (common in PnP.PowerShell structure)
-                                                [System.IO.Path]::Combine($moduleBase, "Core", "Microsoft.SharePoint.Client.dll"),
-                                                # Check in lib subdirectory
-                                                [System.IO.Path]::Combine($moduleBase, "lib", "Microsoft.SharePoint.Client.dll")
-                                            )
-                                            
-                                            # Find the first path that exists
-                                            foreach ($path in $possiblePaths) {
-                                                if (Test-Path $path) {
-                                                    $dllPath = $path
-                                                    Write-DebugLog -LogName $Log -LogEntryText "Found SharePoint Client DLL at: $dllPath"
-                                                    break
-                                                }
-                                            }
-                                            
-                                            # If not found in standard locations, search recursively as a fallback
-                                            if (-not $dllPath) {
-                                                Write-DebugLog -LogName $Log -LogEntryText "Searching recursively for SharePoint Client DLL under $moduleBase"
-                                                $foundFiles = Get-ChildItem -Path $moduleBase -Filter "Microsoft.SharePoint.Client.dll" -Recurse -ErrorAction SilentlyContinue
-                                                if ($foundFiles -and $foundFiles.Count -gt 0) {
-                                                    $dllPath = $foundFiles[0].FullName
-                                                    Write-DebugLog -LogName $Log -LogEntryText "Found SharePoint Client DLL via recursive search at: $dllPath"
-                                                }
-                                            }
-                                            
-                                            # Add the type if found
-                                            if ($dllPath) {
-                                                Add-Type -Path $dllPath
-                                            }
-                                            else {
-                                                Write-ErrorLog -LogName $Log -LogEntryText "Could not find Microsoft.SharePoint.Client.dll in module path: $moduleBase"
-                                                throw "Required SharePoint Client DLL not found"
-                                            }
-                                            
-                                            # Try to get sharing information and remove it
-                                            try {
-                                                # Use ObjectSharingInformation to manage sharing
-                                                $sharingInfo = [Microsoft.SharePoint.Client.Sharing.WebSharingManager]::GetObjectSharingInformation($ctx, $listItem, $false, $false, $false, $true, $true, $true, $true)
-                                                $ctx.Load($sharingInfo)
-                                                $ctx.ExecuteQuery()
+                                            if ($sharingLinks -and $sharingLinks.Count -gt 0) {
+                                                Write-DebugLog -LogName $Log -LogEntryText "Found $($sharingLinks.Count) sharing links for list item with document ID: $documentId"
                                                 
-                                                # If there are sharing links, try to remove them
-                                                if ($sharingInfo.SharingLinks -and $sharingInfo.SharingLinks.Count -gt 0) {
-                                                    foreach ($link in $sharingInfo.SharingLinks) {
-                                                        if ($link.ShareId -and $groupName -like "*$($link.ShareId)*") {
-                                                            # Only delete the link if RemoveSharingLink is true
-                                                            if ($RemoveSharingLink) {
-                                                                # Found the matching link, try to delete it
-                                                                $deleteResult = [Microsoft.SharePoint.Client.Sharing.WebSharingManager]::DeleteSharingLinkByUrl($ctx, $link.Url)
-                                                                $ctx.Load($deleteResult)
-                                                                $ctx.ExecuteQuery()
+                                                # Debug: Show all sharing link IDs
+                                                $linkIds = ($sharingLinks | ForEach-Object { $_.Id }) -join ', '
+                                                Write-DebugLog -LogName $Log -LogEntryText "Sharing link IDs found: $linkIds"
+                                                Write-DebugLog -LogName $Log -LogEntryText "Looking for sharing link matching group: $groupName"
+                                                
+                                                foreach ($sharingLink in $sharingLinks) {
+                                                    Write-DebugLog -LogName $Log -LogEntryText "Checking sharing link ID: $($sharingLink.Id) against group: $groupName"
+                                                    
+                                                    # Try to match the sharing link with our group
+                                                    # The group name contains the document ID, so try multiple approaches
+                                                    $isMatch = $false
+                                                    
+                                                    if ($sharingLink.Id -and $groupName -like "*$($sharingLink.Id)*") {
+                                                        $isMatch = $true
+                                                        Write-DebugLog -LogName $Log -LogEntryText "Match found using sharing link ID in group name"
+                                                    }
+                                                    elseif ($documentId -and $sharingLink.Id -eq $documentId) {
+                                                        $isMatch = $true
+                                                        Write-DebugLog -LogName $Log -LogEntryText "Match found using document ID equals sharing link ID"
+                                                    }
+                                                    elseif ($documentId -and $sharingLink.Id -and $sharingLink.Id.ToString().ToLower() -eq $documentId.ToLower()) {
+                                                        $isMatch = $true
+                                                        Write-DebugLog -LogName $Log -LogEntryText "Match found using case-insensitive document ID comparison"
+                                                    }
+                                                    
+                                                    if ($isMatch) {
+                                                        Write-LogEntry -LogName $Log -LogEntryText "Found matching sharing link with ID: $($sharingLink.Id)" -Level "INFO"
+                                                        
+                                                        # Store the sharing link URL if we have document details
+                                                        if ($siteCollectionData[$SiteUrl].ContainsKey("DocumentDetails") -and 
+                                                            $siteCollectionData[$SiteUrl]["DocumentDetails"].ContainsKey($groupName)) {
+                                                            
+                                                            # Get the WebUrl property of the sharing link from the link property
+                                                            $sharingLinkUrl = if ($sharingLink.link -and $sharingLink.link.WebUrl) { 
+                                                                $sharingLink.link.WebUrl 
+                                                            }
+                                                            else { 
+                                                                "Not found" 
+                                                            }
+                                                            
+                                                            # Get the expiration date of the sharing link
+                                                            $expirationDate = "No expiration"
+                                                            if ($sharingLink.link -and $sharingLink.link.ExpirationDateTime) {
+                                                                # Format the expiration date to a readable format
+                                                                try {
+                                                                    $expDate = [DateTime]::Parse($sharingLink.link.ExpirationDateTime)
+                                                                    $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                                                }
+                                                                catch {
+                                                                    $expirationDate = $sharingLink.link.ExpirationDateTime
+                                                                    Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($sharingLink.link.ExpirationDateTime)"
+                                                                }
+                                                            }
+                                                            elseif ($sharingLink.ExpirationDateTime) {
+                                                                # Alternative location for expiration date
+                                                                try {
+                                                                    $expDate = [DateTime]::Parse($sharingLink.ExpirationDateTime)
+                                                                    $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                                                }
+                                                                catch {
+                                                                    $expirationDate = $sharingLink.ExpirationDateTime
+                                                                    Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($sharingLink.ExpirationDateTime)"
+                                                                }
+                                                            }
+                                                            
+                                                            $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
+                                                            $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["ExpirationDate"] = $expirationDate
+                                                            
+                                                            Write-InfoLog -LogName $Log -LogEntryText "Stored sharing link URL for group $groupName - URL: $sharingLinkUrl, Expiration: $expirationDate"
+                                                        }
+                                                        
+                                                        # Use REST API to remove sharing link for list items (based on captured web traffic)
+                                                        Write-Host "        Attempting to remove sharing link for list item using REST API" -ForegroundColor Cyan
+                                                        Write-DebugLog -LogName $Log -LogEntryText "Attempting to remove sharing link for list item using REST API: $documentUrl"
+                                                        
+                                                        try {
+                                                            # Extract list ID and item ID from the document URL
+                                                            $listId = ""
+                                                            $itemId = ""
+                                                            
+                                                            # Parse item ID from URL
+                                                            if ($documentUrl -match "DispForm\.aspx\?ID=(\d+)") {
+                                                                $itemId = $matches[1]
+                                                                Write-DebugLog -LogName $Log -LogEntryText "Extracted item ID: $itemId"
+                                                            }
+                                                            
+                                                            # Get the list ID by parsing the URL or using PnP to find the list
+                                                            if ($documentUrl -match "/Lists/([^/]+)/DispForm\.aspx") {
+                                                                $listName = $matches[1]
+                                                                Write-DebugLog -LogName $Log -LogEntryText "Extracted list name: $listName"
                                                                 
-                                                                if ($deleteResult.Value) {
-                                                                    Write-Host "        Successfully removed sharing link using CSOM WebSharingManager" -ForegroundColor Green
-                                                                    Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing link using CSOM WebSharingManager"
+                                                                # Get the list to find its ID
+                                                                $list = Get-PnPList -Identity $listName -ErrorAction SilentlyContinue
+                                                                if ($list) {
+                                                                    $listId = $list.Id.ToString()
+                                                                    Write-DebugLog -LogName $Log -LogEntryText "Found list ID: $listId"
+                                                                }
+                                                            }
+                                                            
+                                                            if (-not [string]::IsNullOrWhiteSpace($listId) -and -not [string]::IsNullOrWhiteSpace($itemId) -and $sharingLink.Id) {
+                                                                # Construct the REST API call similar to the captured web traffic
+                                                                $restUrl = "$SiteUrl/_api/web/Lists(@a1)/GetItemById(@a2)/UnshareLink?@a1='$($listId.Replace('-','%2D'))'&@a2='$itemId'"
+                                                                
+                                                                # Create the request body exactly as captured in web traffic
+                                                                # The shareId should be the sharing link ID, not the document ID
+                                                                $requestBody = @{
+                                                                    linkKind = 3  # Organization link kind
+                                                                    shareId  = $sharingLink.Id.ToString()  # Ensure it's a string
+                                                                }
+                                                                
+                                                                # Convert to JSON with specific formatting to match captured traffic
+                                                                $jsonBody = $requestBody | ConvertTo-Json -Compress
+                                                                
+                                                                Write-DebugLog -LogName $Log -LogEntryText "REST API URL: $restUrl"
+                                                                Write-DebugLog -LogName $Log -LogEntryText "Request body: $jsonBody"
+                                                                Write-DebugLog -LogName $Log -LogEntryText "ShareId from sharing link: $($sharingLink.Id)"
+                                                                Write-DebugLog -LogName $Log -LogEntryText "Sharing link object type: $($sharingLink.GetType().FullName)"
+                                                                
+                                                                # Try a simpler approach - use the exact same format as captured
+                                                                $simpleBody = "{`"linkKind`":3,`"shareId`":`"$($sharingLink.Id)`"}"
+                                                                Write-DebugLog -LogName $Log -LogEntryText "Simple body format: $simpleBody"
+                                                                
+                                                                # Try using Invoke-RestMethod directly for better control
+                                                                try {
+                                                                    Write-DebugLog -LogName $Log -LogEntryText "Attempting REST call with PnP authentication context"
+                                                                    
+                                                                    # Use PnP's built-in REST method instead of manual token handling
+                                                                    $response = Invoke-PnPSPRestMethod -Url $restUrl -Method POST -Content $simpleBody
+                                                                    
+                                                                    Write-Host "          Successfully removed sharing link for list item using PnP REST method" -ForegroundColor Green
+                                                                    Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing link for list item using PnP REST method: $documentUrl"
                                                                     $linkRemoved = $true
+                                                                }
+                                                                catch {
+                                                                    $pnpRestError = $_.Exception.Message
+                                                                    Write-DebugLog -LogName $Log -LogEntryText "PnP REST method failed: $pnpRestError"
+                                                                    
+                                                                    # Try manual approach with proper authentication
+                                                                    try {
+                                                                        Write-DebugLog -LogName $Log -LogEntryText "Trying manual REST call with proper authentication"
+                                                                        
+                                                                        # Get the current web context for proper authentication
+                                                                        $web = Get-PnPWeb
+                                                                        $context = Get-PnPContext
+                                                                        
+                                                                        # Use CSOM to execute the UnshareLink method directly
+                                                                        Write-DebugLog -LogName $Log -LogEntryText "Attempting CSOM UnshareLink method"
+                                                                        
+                                                                        # Get the list by ID
+                                                                        $list = $context.Web.Lists.GetById($listId)
+                                                                        $context.Load($list)
+                                                                        $context.ExecuteQuery()
+                                                                        
+                                                                        # Get the list item
+                                                                        $listItem = $list.GetItemById($itemId)
+                                                                        $context.Load($listItem)
+                                                                        $context.ExecuteQuery()
+                                                                        
+                                                                        # Call UnshareLink directly through CSOM
+                                                                        $unshareResult = $listItem.UnshareLink(3, $sharingLink.Id)
+                                                                        $context.ExecuteQuery()
+                                                                        
+                                                                        Write-Host "          Successfully removed sharing link for list item using CSOM UnshareLink" -ForegroundColor Green
+                                                                        Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing link for list item using CSOM UnshareLink: $documentUrl"
+                                                                        $linkRemoved = $true
+                                                                    }
+                                                                    catch {
+                                                                        $csomError = $_.Exception.Message
+                                                                        Write-DebugLog -LogName $Log -LogEntryText "CSOM UnshareLink failed: $csomError"
+                                                                        
+                                                                        # Final fallback: try using Remove-PnPFileSharingLink with different parameters
+                                                                        try {
+                                                                            Write-DebugLog -LogName $Log -LogEntryText "Final fallback: trying Remove-PnPFileSharingLink with sharing link ID"
+                                                                            
+                                                                            # Try using the sharing link ID directly
+                                                                            Remove-PnPFileSharingLink -Identity $sharingLink.Id -Force
+                                                                            
+                                                                            Write-Host "          Successfully removed sharing link using Remove-PnPFileSharingLink fallback" -ForegroundColor Green
+                                                                            Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing link using Remove-PnPFileSharingLink fallback: $documentUrl"
+                                                                            $linkRemoved = $true
+                                                                        }
+                                                                        catch {
+                                                                            Write-DebugLog -LogName $Log -LogEntryText "All sharing link removal methods failed. Final error: $($_.Exception.Message)"
+                                                                            Write-Host "          Warning: All sharing link removal methods failed for list item" -ForegroundColor Red
+                                                                            $linkRemoved = $false
+                                                                        }
+                                                                    }
                                                                 }
                                                             }
                                                             else {
-                                                                Write-Host "        Preserving sharing link as requested (RemoveSharingLink = $false)" -ForegroundColor Cyan
-                                                                Write-InfoLog -LogName $Log -LogEntryText "Preserved sharing link using CSOM WebSharingManager (RemoveSharingLink = $false)"
-                                                                $linkRemoved = $true  # Mark as processed even though we didn't actually remove it
+                                                                Write-Host "          Warning: Could not extract required IDs for REST API call (ListID: $listId, ItemID: $itemId, ShareID: $($sharingLink.Id))" -ForegroundColor Yellow
+                                                                Write-DebugLog -LogName $Log -LogEntryText "Could not extract required IDs for REST API call - ListID: $listId, ItemID: $itemId, ShareID: $($sharingLink.Id)"
+                                                                $linkRemoved = $false
                                                             }
-                                                            break
                                                         }
+                                                        catch {
+                                                            Write-Host "          Warning: REST API call failed for list item: $_" -ForegroundColor Red
+                                                            Write-ErrorLog -LogName $Log -LogEntryText "REST API call failed for list item: $_"
+                                                            $linkRemoved = $false
+                                                        }
+                                                        
+                                                        break
                                                     }
                                                 }
-                                            }
-                                            catch {
-                                                Write-LogEntry -LogName $Log -LogEntryText "WebSharingManager approach failed: $_" -Level "DEBUG"
                                                 
-                                                # Final fallback: Try to break role inheritance and clear sharing
-                                                try {
-                                                    Write-DebugLog -LogName $Log -LogEntryText "Attempting to break inheritance and clear sharing"
-                                                    
-                                                    # Break role inheritance to stop sharing
-                                                    $listItem.BreakRoleInheritance($false, $false)
-                                                    $ctx.ExecuteQuery()
-                                                    
-                                                    Write-Host "        Successfully broke inheritance to stop sharing" -ForegroundColor Green
-                                                    Write-LogEntry -LogName $Log -LogEntryText "Successfully broke inheritance to stop sharing" -Level "INFO"
-                                                    $linkRemoved = $true
+                                                # Since we already handled the link removal above by skipping it,
+                                                # this fallback won't execute for list items (linkRemoved is already true)
+                                                if (-not $linkRemoved -and $sharingLinks -and $sharingLinks.Count -gt 0) {
+                                                    Write-DebugLog -LogName $Log -LogEntryText "Fallback: This should not execute for list items since linkRemoved is already true"
                                                 }
-                                                catch {
-                                                    Write-LogEntry -LogName $Log -LogEntryText "Break inheritance also failed: $_" -Level "DEBUG"
+                                            }
+                                            else {
+                                                Write-DebugLog -LogName $Log -LogEntryText "No sharing links found for list item with document ID: $documentId"
+                                            }
+                                        }
+                                        catch {
+                                            Write-Host "        Error during list item sharing link operations: $_" -ForegroundColor Red
+                                            Write-ErrorLog -LogName $Log -LogEntryText "List item sharing link operations failed for document ID $documentId : $_"
+                                        }
+                                    }
+                                    else {
+                                        # This is a regular file - use the original file-based approach
+                                        Write-DebugLog -LogName $Log -LogEntryText "Processing as regular file for sharing link removal"
+                                        
+                                        try {
+                                            $file = Get-PnPFile -Url $relativePath
+                                            
+                                            # Get all sharing links for this file using the correct parameter
+                                            $sharingLinks = Get-PnPFileSharingLink -Identity $relativePath
+                                            
+                                            # Log the structure of the sharing links for debugging
+                                            if ($debugLogging -and $sharingLinks -and $sharingLinks.Count -gt 0) {
+                                                $firstLink = $sharingLinks[0]
+                                                Write-DebugLog -LogName $Log -LogEntryText "Sharing link object properties: $(($firstLink | Get-Member -MemberType Property).Name -join ', ')"
+                                                
+                                                if ($firstLink.link) {
+                                                    Write-DebugLog -LogName $Log -LogEntryText "Link property exists. Link properties: $(($firstLink.link | Get-Member -MemberType Property).Name -join ', ')"
+                                                    if ($firstLink.link.WebUrl) {
+                                                        Write-DebugLog -LogName $Log -LogEntryText "WebUrl found: $($firstLink.link.WebUrl)"
+                                                    }
+                                                }
+                                                else {
+                                                    Write-DebugLog -LogName $Log -LogEntryText "Link property doesn't exist or is null"
+                                                }
+                                            }
+                                            
+                                            foreach ($sharingLink in $sharingLinks) {
+                                                # Try to match the sharing link with our group
+                                                if ($sharingLink.Id -and $groupName -like "*$($sharingLink.Id)*") {
+                                                    Write-LogEntry -LogName $Log -LogEntryText "Found matching sharing link with ID: $($sharingLink.Id)" -Level "INFO"
+                                                    
+                                                    # Store the sharing link URL if we have document details
+                                                    if ($siteCollectionData[$SiteUrl].ContainsKey("DocumentDetails") -and 
+                                                        $siteCollectionData[$SiteUrl]["DocumentDetails"].ContainsKey($groupName)) {
+                                                        
+                                                        # Get the WebUrl property of the sharing link from the link property
+                                                        $sharingLinkUrl = if ($sharingLink.link -and $sharingLink.link.WebUrl) { 
+                                                            $sharingLink.link.WebUrl 
+                                                        }
+                                                        else { 
+                                                            "Not found" 
+                                                        }
+                                                        
+                                                        # Get the expiration date of the sharing link
+                                                        $expirationDate = "No expiration"
+                                                        if ($sharingLink.link -and $sharingLink.link.ExpirationDateTime) {
+                                                            # Format the expiration date to a readable format
+                                                            try {
+                                                                $expDate = [DateTime]::Parse($sharingLink.link.ExpirationDateTime)
+                                                                $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                                            }
+                                                            catch {
+                                                                $expirationDate = $sharingLink.link.ExpirationDateTime
+                                                                Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($sharingLink.link.ExpirationDateTime)"
+                                                            }
+                                                        }
+                                                        elseif ($sharingLink.ExpirationDateTime) {
+                                                            # Alternative location for expiration date
+                                                            try {
+                                                                $expDate = [DateTime]::Parse($sharingLink.ExpirationDateTime)
+                                                                $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                                            }
+                                                            catch {
+                                                                $expirationDate = $sharingLink.ExpirationDateTime
+                                                                Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($sharingLink.ExpirationDateTime)"
+                                                            }
+                                                        }
+                                                        
+                                                        $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
+                                                        $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["ExpirationDate"] = $expirationDate
+                                                        
+                                                        Write-InfoLog -LogName $Log -LogEntryText "Stored sharing link URL for group $groupName - URL: $sharingLinkUrl, Expiration: $expirationDate"
+                                                    }
+                                                    
+                                                    # Remove the sharing link using the file URL and sharing link ID
+                                                    Remove-PnPFileSharingLink -FileUrl $relativePath -Id $sharingLink.Id -Force
+                                                    
+                                                    Write-Host "        Successfully removed sharing link using PnP methods" -ForegroundColor Green
+                                                    Write-InfoLog -LogName $Log -LogEntryText "Successfully removed sharing link with ID: $($sharingLink.Id)"
+                                                    $linkRemoved = $true
+                                                    break
                                                 }
                                             }
                                         }
                                         catch {
-                                            Write-LogEntry -LogName $Log -LogEntryText "CSOM approach completely failed: $_" -Level "DEBUG"
+                                            Write-LogEntry -LogName $Log -LogEntryText "PnP sharing link methods failed: $_" -Level "DEBUG"
+                                            # Fall through to alternative methods
                                         }
                                     }
-                                }
+                                    
+                                    # Return the result
+                                    return $linkRemoved
+                                } -Operation "Unshare link using PnP and CSOM methods"
                                 
-                                # Return the result
-                                return $linkRemoved
-                            } -Operation "Unshare link using PnP and CSOM methods"
-                            
-                            # Set the result from the script block
-                            $sharingLinkRemoved = $result
-                            
-                            if (-not $sharingLinkRemoved) {
-                                Write-ErrorLog -LogName $Log -LogEntryText "All for group: $groupName"
+                                # Set the result from the script block
+                                $sharingLinkRemoved = $result
+                                
+                                if (-not $sharingLinkRemoved) {
+                                    Write-ErrorLog -LogName $Log -LogEntryText "All sharing link removal methods failed for group: $groupName"
+                                }
+                            }
+                            catch {
+                                Write-ErrorLog -LogName $Log -LogEntryText "All sharing link removal methods failed: $_"
                             }
                         }
-                        catch {
-                            Write-ErrorLog -LogName $Log -LogEntryText "All: $_"
-                        }
-                    }
-                    
-                    # Only try group removal if sharing link removal failed
-                    if (-not $sharingLinkRemoved) {
-                        Write-LogEntry -LogName $Log -LogEntryText "Sharing link removal failed, falling back to group removal method" -Level "INFO"
+                        
+                        # Always try to remove the empty group after removing members and sharing links
+                        Write-LogEntry -LogName $Log -LogEntryText "Attempting to remove empty Organization sharing group: $groupName" -Level "INFO"
                         
                         try {
                             Invoke-WithThrottleHandling -ScriptBlock {
@@ -1339,87 +1382,34 @@ Function Convert-OrganizationSharingLinks {
                             } -Operation "Remove empty Organization sharing group $groupName"
                         }
                         catch {
-                            $removeError = $_.Exception.Message
-                            Write-LogEntry -LogName $Log -LogEntryText "Could not remove sharing group $groupName : $removeError" -Level "DEBUG"
-                            
-                            # If standard removal fails, try CSOM force removal only if error is not about missing group
-                            if ($removeError -notmatch "does not exist|not found|Group cannot be found") {
-                                try {
-                                    Write-DebugLog -LogName $Log -LogEntryText "Attempting CSOM force removal of group $groupName"
-                                    Invoke-WithThrottleHandling -ScriptBlock {
-                                        # Get the web and group collection
-                                        $web = Get-PnPWeb
-                                        $ctx = $web.Context
-                                        
-                                        # First check if group exists in CSOM context
-                                        try {
-                                            $groupToRemove = $web.SiteGroups.GetById($orgGroup.Id)
-                                            $ctx.Load($groupToRemove)
-                                            $ctx.ExecuteQuery()
-                                            
-                                            # If we get here, group exists, so remove it
-                                            $web.SiteGroups.Remove($groupToRemove)
-                                            $ctx.ExecuteQuery()
-                                            
-                                            Write-Host "      Force removed sharing group: $groupName" -ForegroundColor Green
-                                            Write-LogEntry -LogName $Log -LogEntryText "Force removed Organization sharing group: $groupName" -Level "INFO"
-                                        }
-                                        catch {
-                                            if ($_.Exception.Message -like "*Group cannot be found*") {
-                                                Write-LogEntry -LogName $Log -LogEntryText "Group $groupName no longer exists in CSOM context" -Level "INFO"
-                                                Write-Host "      Group no longer exists (CSOM check)" -ForegroundColor Yellow
-                                            }
-                                            else {
-                                                throw
-                                            }
-                                        }
-                                    } -Operation "Force remove Organization sharing group using CSOM"
-                                }
-                                catch {
-                                    Write-Host "      Warning: Could not remove sharing group $groupName : $_" -ForegroundColor Red
-                                    Write-LogEntry -LogName $Log -LogEntryText "Final attempt failed to remove sharing group $groupName : $_" -Level "ERROR"
-                                }
-                            }
-                            else {
-                                Write-LogEntry -LogName $Log -LogEntryText "Group $groupName appears to have already been removed: $removeError" -Level "INFO"
-                                Write-Host "      Group appears to have already been removed" -ForegroundColor Yellow
-                            }
+                            Write-Host "      Warning: Could not remove sharing group $groupName : $_" -ForegroundColor Red
+                            Write-ErrorLog -LogName $Log -LogEntryText "Final attempt failed to remove sharing group $groupName : $_"
                         }
+                        
+                        # Update the link removal status in site collection data
+                        Update-LinkRemovalStatus -SiteUrl $SiteUrl -SharingGroupName $groupName -WasRemoved $true
                     }
-                    else {
-                        # Sharing link was successfully processed
-                        if ($RemoveSharingLink) {
-                            Write-Host "      Sharing link successfully removed, group should be automatically cleaned up" -ForegroundColor Green
-                            Write-LogEntry -LogName $Log -LogEntryText "Sharing link successfully removed for group $groupName, skipping manual group removal" -Level "INFO"
-                        }
-                        else {
-                            Write-Host "      Users converted to direct permissions, sharing link preserved as requested" -ForegroundColor Cyan
-                            Write-LogEntry -LogName $Log -LogEntryText "Users converted to direct permissions for group $groupName, sharing link preserved (RemoveSharingLink = $false)" -Level "INFO"
-                        }
-                    }
+                }
+                catch {
+                    Write-Host "      Warning: Error during sharing link removal for $groupName : $_" -ForegroundColor Red
+                    Write-ErrorLog -LogName $Log -LogEntryText "Error during sharing link removal for $groupName : $_"
                     
-                    # Update the link removal status in site collection data
-                    Update-LinkRemovalStatus -SiteUrl $SiteUrl -SharingGroupName $groupName -WasRemoved $sharingLinkRemoved
+                    # Update status as failed for this group
+                    Update-LinkRemovalStatus -SiteUrl $SiteUrl -SharingGroupName $groupName -WasRemoved $false
                 }
             }
-            catch {
-                Write-Host "      Warning: Error during sharing link removal for $groupName : $_" -ForegroundColor Red
-                Write-ErrorLog -LogName $Log -LogEntryText "Error during $_"
-                
-                # Update status as failed for this group
+            else {
+                Write-Host "      Preserving Organization sharing group: $groupName (RemoveSharingLink is disabled)" -ForegroundColor Cyan
+                Write-InfoLog -LogName $Log -LogEntryText "Preserving Organization sharing group: $groupName because RemoveSharingLink is disabled"
                 Update-LinkRemovalStatus -SiteUrl $SiteUrl -SharingGroupName $groupName -WasRemoved $false
             }
         }
     }
     catch {
         Write-Host "  Error processing Organization sharing links for site $SiteUrl : $_" -ForegroundColor Red
-        Write-ErrorLog -LogName $Log -LogEntryText "Error during $_"
+        Write-ErrorLog -LogName $Log -LogEntryText "Error processing Organization sharing links for site $SiteUrl : $_"
     }
 }
-
-# ----------------------------------------------
-# Function to clean up corrupted sharing groups
-# ----------------------------------------------
 Function Remove-CorruptedSharingGroups {
     param(
         [Parameter(Mandatory = $true)]
@@ -1585,6 +1575,187 @@ Function Test-AndParseScriptCsvOutput {
 }
 
 # ----------------------------------------------
+# Function to search for documents using Microsoft Graph API
+# ----------------------------------------------
+Function Search-DocumentViaGraphAPI {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $DocumentId,
+        [Parameter(Mandatory = $true)]
+        [string] $SearchRegion,
+        [Parameter(Mandatory = $false)]
+        [string] $LogContext = "Document search"
+    )
+    
+    $result = @{
+        Found         = $false
+        DocumentUrl   = ""
+        DocumentOwner = ""
+        ItemType      = ""
+    }
+    
+    try {
+        Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Searching for document ID: $DocumentId"
+        
+        $graphToken = Invoke-WithThrottleHandling -ScriptBlock {
+            Get-PnPAccessToken
+        } -Operation "Get-PnPAccessToken for $LogContext"
+        
+        if (-not $graphToken) {
+            Write-ErrorLog -LogName $Log -LogEntryText "$LogContext - Unable to get Graph access token"
+            return $result
+        }
+        
+        $headers = @{
+            "Authorization" = "Bearer $graphToken"
+            "Content-Type"  = "application/json"
+        }
+        
+        $searchUrl = "https://graph.microsoft.com/v1.0/search/query"
+        $itemFound = $false
+        
+        # First, try searching as driveItem (files in document libraries)
+        $driveItemSearchQuery = @{
+            requests = @(
+                @{
+                    entityTypes               = @("driveItem")
+                    query                     = @{
+                        queryString = "UniqueID:$DocumentId"
+                    }
+                    from                      = 0
+                    size                      = 25
+                    sharePointOneDriveOptions = @{
+                        includeContent = "sharedContent,privateContent"
+                    }
+                    region                    = $SearchRegion
+                }
+            )
+        }
+        
+        $searchBody = $driveItemSearchQuery | ConvertTo-Json -Depth 5
+        
+        $searchResults = Invoke-WithThrottleHandling -ScriptBlock {
+            Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Post -Body $searchBody
+        } -Operation "$LogContext - Microsoft Graph Search for document ID $DocumentId (driveItem)"
+        
+        Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Graph search response structure: value count = $(if ($searchResults.value) { $searchResults.value.Count } else { 'null' })"
+        
+        # Check if we found results with driveItem search
+        if ($searchResults.value -and 
+            $searchResults.value[0].hitsContainers -and 
+            $searchResults.value[0].hitsContainers[0].hits -and 
+            $searchResults.value[0].hitsContainers[0].hits.Count -gt 0) {
+            
+            $hit = $searchResults.value[0].hitsContainers[0].hits[0]
+            $resource = $hit.resource
+            
+            Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Found hit with resource. WebUrl: '$($resource.webUrl)', CreatedBy: '$($resource.createdBy.user.displayName)'"
+            
+            if ($resource) {
+                $result.Found = $true
+                $result.ItemType = "driveItem"
+                
+                # Use the WebUrl from the result if available
+                if ($resource.webUrl) {
+                    $result.DocumentUrl = $resource.webUrl
+                }
+                
+                # Try to get the author/owner if available
+                if ($resource.createdBy.user.displayName) {
+                    $ownerDisplayName = $resource.createdBy.user.displayName
+                    $ownerEmail = $resource.createdBy.user.email
+                    
+                    if ($ownerEmail) {
+                        $result.DocumentOwner = "$ownerDisplayName <$ownerEmail>"
+                    }
+                    else {
+                        $result.DocumentOwner = $ownerDisplayName
+                    }
+                }
+                
+                Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Located document via Graph search (driveItem): $($result.DocumentUrl)"
+                $itemFound = $true
+            }
+        }
+        
+        # If no results found with driveItem, try searching as listItem (SharePoint list items)
+        if (-not $itemFound) {
+            Write-DebugLog -LogName $Log -LogEntryText "$LogContext - No driveItem found, trying listItem search for ID: $DocumentId"
+            
+            $listItemSearchQuery = @{
+                requests = @(
+                    @{
+                        entityTypes               = @("listItem")
+                        query                     = @{
+                            queryString = "UniqueID:$DocumentId"
+                        }
+                        from                      = 0
+                        size                      = 25
+                        sharePointOneDriveOptions = @{
+                            includeContent = "sharedContent,privateContent"
+                        }
+                        region                    = $SearchRegion
+                    }
+                )
+            }
+            
+            $listItemSearchBody = $listItemSearchQuery | ConvertTo-Json -Depth 5
+            
+            $listItemSearchResults = Invoke-WithThrottleHandling -ScriptBlock {
+                Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Post -Body $listItemSearchBody
+            } -Operation "$LogContext - Microsoft Graph Search for document ID $DocumentId (listItem)"
+            
+            Write-DebugLog -LogName $Log -LogEntryText "$LogContext - List item search response structure: value count = $(if ($listItemSearchResults.value) { $listItemSearchResults.value.Count } else { 'null' })"
+            
+            if ($listItemSearchResults.value -and 
+                $listItemSearchResults.value[0].hitsContainers -and 
+                $listItemSearchResults.value[0].hitsContainers[0].hits -and 
+                $listItemSearchResults.value[0].hitsContainers[0].hits.Count -gt 0) {
+                
+                $hit = $listItemSearchResults.value[0].hitsContainers[0].hits[0]
+                $resource = $hit.resource
+                
+                Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Found list item hit with resource. WebUrl: '$($resource.webUrl)', CreatedBy: '$($resource.createdBy.user.displayName)'"
+                
+                if ($resource) {
+                    $result.Found = $true
+                    $result.ItemType = "listItem"
+                    
+                    # Use the WebUrl from the result if available
+                    if ($resource.webUrl) {
+                        $result.DocumentUrl = $resource.webUrl
+                    }
+                    
+                    # Try to get the author/owner if available
+                    if ($resource.createdBy.user.displayName) {
+                        $ownerDisplayName = $resource.createdBy.user.displayName
+                        $ownerEmail = $resource.createdBy.user.email
+                        
+                        if ($ownerEmail) {
+                            $result.DocumentOwner = "$ownerDisplayName <$ownerEmail>"
+                        }
+                        else {
+                            $result.DocumentOwner = $ownerDisplayName
+                        }
+                    }
+                    
+                    Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Located list item via Graph search (listItem): $($result.DocumentUrl)"
+                    $itemFound = $true
+                }
+            }
+            else {
+                Write-DebugLog -LogName $Log -LogEntryText "$LogContext - No matching items found in Graph search (both driveItem and listItem) for ID: $DocumentId"
+            }
+        }
+    }
+    catch {
+        Write-ErrorLog -LogName $Log -LogEntryText "$LogContext - Error searching for document via Graph API: $_"
+    }
+    
+    return $result
+}
+
+# ----------------------------------------------
 # Function to collect and store sharing link URLs for a site
 # ----------------------------------------------
 Function Get-SharingLinkUrls {
@@ -1634,103 +1805,99 @@ Function Get-SharingLinkUrls {
                     
                     $docUrl = $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["DocumentUrl"]
                     
-                    # Get the relative path from the document URL
+                    # Try to get sharing links using the document ID directly (works for both files and list items)
                     try {
-                        $uri = [System.Uri]$docUrl
-                        $relativePath = $uri.AbsolutePath
+                        $sharingLinks = $null
+                        $sharingLinkUrl = "Not found"
+                        $expirationDate = "No expiration"
                         
-                        if (-not [string]::IsNullOrWhiteSpace($relativePath)) {
-                            # Try to get sharing links for this document
-                            try {
-                                $sharingLinks = Invoke-WithThrottleHandling -ScriptBlock {
-                                    Get-PnPFileSharingLink -Identity $relativePath -ErrorAction SilentlyContinue
-                                } -Operation "Get sharing links for document at $relativePath"
+                        Write-DebugLog -LogName $Log -LogEntryText "Attempting to get sharing links using document ID: $documentId"
+                        
+                        # Use Get-PnPFileSharingLink with the document ID directly (works for both files and list items)
+                        $sharingLinks = Invoke-WithThrottleHandling -ScriptBlock {
+                            Get-PnPFileSharingLink -Identity $documentId -ErrorAction SilentlyContinue
+                        } -Operation "Get sharing links for document ID: $documentId"
+                        
+                        if ($sharingLinks -and $sharingLinks.Count -gt 0) {
+                            Write-DebugLog -LogName $Log -LogEntryText "Found $($sharingLinks.Count) sharing links for document"
+                            
+                            # Log the structure of the first sharing link object to help with debugging
+                            if ($debugLogging -and $sharingLinks[0]) {
+                                $firstLink = $sharingLinks[0]
+                                Write-DebugLog -LogName $Log -LogEntryText "Sharing link object properties: $(($firstLink | Get-Member -MemberType Property).Name -join ', ')"
                                 
-                                if ($sharingLinks -and $sharingLinks.Count -gt 0) {
-                                    Write-DebugLog -LogName $Log -LogEntryText "Found $($sharingLinks.Count) sharing links for document"
-                                    
-                                    # Log the structure of the first sharing link object to help with debugging
-                                    if ($debugLogging -and $sharingLinks[0]) {
-                                        $firstLink = $sharingLinks[0]
-                                        Write-DebugLog -LogName $Log -LogEntryText "Sharing link object properties: $(($firstLink | Get-Member -MemberType Property).Name -join ', ')"
-                                        
-                                        if ($firstLink.link) {
-                                            Write-DebugLog -LogName $Log -LogEntryText "Link property exists. Link properties: $(($firstLink.link | Get-Member -MemberType Property).Name -join ', ')"
-                                            if ($firstLink.link.WebUrl) {
-                                                Write-DebugLog -LogName $Log -LogEntryText "WebUrl found: $($firstLink.link.WebUrl)"
-                                            }
-                                            if ($firstLink.link.ExpirationDateTime) {
-                                                Write-DebugLog -LogName $Log -LogEntryText "ExpirationDateTime found: $($firstLink.link.ExpirationDateTime)"
-                                            }
-                                        }
-                                        else {
-                                            Write-DebugLog -LogName $Log -LogEntryText "Link property doesn't exist or is null"
-                                        }
-                                        
-                                        # Also check for expiration date at the top level
-                                        if ($firstLink.ExpirationDateTime) {
-                                            Write-DebugLog -LogName $Log -LogEntryText "Top-level ExpirationDateTime found: $($firstLink.ExpirationDateTime)"
-                                        }
+                                if ($firstLink.link) {
+                                    Write-DebugLog -LogName $Log -LogEntryText "Link property exists. Link properties: $(($firstLink.link | Get-Member -MemberType Property).Name -join ', ')"
+                                    if ($firstLink.link.WebUrl) {
+                                        Write-DebugLog -LogName $Log -LogEntryText "WebUrl found: $($firstLink.link.WebUrl)"
                                     }
-                                    
-                                    # Look for a matching sharing link
-                                    $matchingLink = $sharingLinks | Where-Object { $_.Id -and $groupName -like "*$($_.Id)*" } | Select-Object -First 1
-                                    
-                                    if ($matchingLink) {
-                                        # Get the WebUrl property of the sharing link from the link property
-                                        $sharingLinkUrl = if ($matchingLink.link -and $matchingLink.link.WebUrl) { 
-                                            $matchingLink.link.WebUrl 
-                                        }
-                                        else { 
-                                            "Not found" 
-                                        }
-                                        
-                                        # Get the expiration date of the sharing link
-                                        $expirationDate = "No expiration"
-                                        if ($matchingLink.link -and $matchingLink.link.ExpirationDateTime) {
-                                            # Format the expiration date to a readable format
-                                            try {
-                                                $expDate = [DateTime]::Parse($matchingLink.link.ExpirationDateTime)
-                                                $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
-                                            }
-                                            catch {
-                                                $expirationDate = $matchingLink.link.ExpirationDateTime
-                                                Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($matchingLink.link.ExpirationDateTime)"
-                                            }
-                                        }
-                                        elseif ($matchingLink.ExpirationDateTime) {
-                                            # Alternative location for expiration date
-                                            try {
-                                                $expDate = [DateTime]::Parse($matchingLink.ExpirationDateTime)
-                                                $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
-                                            }
-                                            catch {
-                                                $expirationDate = $matchingLink.ExpirationDateTime
-                                                Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($matchingLink.ExpirationDateTime)"
-                                            }
-                                        }
-                                        
-                                        $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
-                                        $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["ExpirationDate"] = $expirationDate
-                                        
-                                        Write-Host "      Found sharing link URL for group: $groupName" -ForegroundColor Green
-                                        Write-InfoLog -LogName $Log -LogEntryText "Found sharing link URL for group $groupName - URL: $sharingLinkUrl, Expiration: $expirationDate"
-                                    }
-                                    else {
-                                        Write-DebugLog -LogName $Log -LogEntryText "No matching sharing link found for group: $groupName"
+                                    if ($firstLink.link.ExpirationDateTime) {
+                                        Write-DebugLog -LogName $Log -LogEntryText "ExpirationDateTime found: $($firstLink.link.ExpirationDateTime)"
                                     }
                                 }
                                 else {
-                                    Write-DebugLog -LogName $Log -LogEntryText "No sharing links found for document at: $relativePath"
+                                    Write-DebugLog -LogName $Log -LogEntryText "Link property doesn't exist or is null"
+                                }
+                                
+                                # Also check for expiration date at the top level
+                                if ($firstLink.ExpirationDateTime) {
+                                    Write-DebugLog -LogName $Log -LogEntryText "Top-level ExpirationDateTime found: $($firstLink.ExpirationDateTime)"
                                 }
                             }
-                            catch {
-                                Write-DebugLog -LogName $Log -LogEntryText "Error getting sharing links for document: $_"
+                            
+                            # Look for a matching sharing link
+                            $matchingLink = $sharingLinks | Where-Object { $_.Id -and $groupName -like "*$($_.Id)*" } | Select-Object -First 1
+                            
+                            if ($matchingLink) {
+                                # Get the WebUrl property of the sharing link from the link property
+                                $sharingLinkUrl = if ($matchingLink.link -and $matchingLink.link.WebUrl) { 
+                                    $matchingLink.link.WebUrl 
+                                }
+                                else { 
+                                    "Not found" 
+                                }
+                                
+                                # Get the expiration date of the sharing link
+                                if ($matchingLink.link -and $matchingLink.link.ExpirationDateTime) {
+                                    # Format the expiration date to a readable format
+                                    try {
+                                        $expDate = [DateTime]::Parse($matchingLink.link.ExpirationDateTime)
+                                        $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                    }
+                                    catch {
+                                        $expirationDate = $matchingLink.link.ExpirationDateTime
+                                        Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($matchingLink.link.ExpirationDateTime)"
+                                    }
+                                }
+                                elseif ($matchingLink.ExpirationDateTime) {
+                                    # Alternative location for expiration date
+                                    try {
+                                        $expDate = [DateTime]::Parse($matchingLink.ExpirationDateTime)
+                                        $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                    }
+                                    catch {
+                                        $expirationDate = $matchingLink.ExpirationDateTime
+                                        Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($matchingLink.ExpirationDateTime)"
+                                    }
+                                }
+                                
+                                # Store the results
+                                $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
+                                $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["ExpirationDate"] = $expirationDate
+                                
+                                #Write-Host "      Found sharing link URL for group: $groupName" -ForegroundColor Green
+                                Write-DebugLog -LogName $Log -LogEntryText "Found sharing link URL for group $groupName - URL: $sharingLinkUrl, Expiration: $expirationDate"
                             }
+                            else {
+                                Write-DebugLog -LogName $Log -LogEntryText "No matching sharing link found for group: $groupName"
+                            }
+                        }
+                        else {
+                            Write-DebugLog -LogName $Log -LogEntryText "No sharing links found for document at: $docUrl"
                         }
                     }
                     catch {
-                        Write-DebugLog -LogName $Log -LogEntryText "Error parsing document URL: $_"
+                        Write-DebugLog -LogName $Log -LogEntryText "Error getting sharing links for document: $_"
                     }
                 }
                 else {
@@ -1758,7 +1925,9 @@ Write-Host "======================================================" -ForegroundC
 Write-Host "SCRIPT MODE: $scriptMode" -ForegroundColor $(if ($convertOrganizationLinks) { "Yellow" } else { "Cyan" })
 if ($convertOrganizationLinks) {
     Write-Host "  - Organization sharing links will be CONVERTED to direct permissions" -ForegroundColor Yellow
-    Write-Host "  - Corrupted sharing groups will be cleaned up automatically" -ForegroundColor Yellow
+    Write-Host "  - Sharing links will be REMOVED after converting users" -ForegroundColor Yellow
+    Write-Host "  - Empty sharing groups will be cleaned up automatically" -ForegroundColor Yellow
+    Write-Host "  - Results will be saved to: $sharingLinksOutputFile" -ForegroundColor Yellow
 }
 else {
     Write-Host "  - Only DETECTING and INVENTORYING sharing links" -ForegroundColor Cyan
@@ -1837,9 +2006,11 @@ foreach ($site in $sites) {
                         # Extract document ID from sharing group name
                         if ($spGroupName -match "SharingLinks\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.") {
                             $documentId = $matches[1]
+                            Write-DebugLog -LogName $Log -LogEntryText "Extracted document ID: $documentId from sharing group: $spGroupName"
                             $sharingType = "Unknown"
                             $documentUrl = ""
                             $documentOwner = ""
+                            $documentItemType = ""
                             
                             # Determine sharing type from group name
                             if ($spGroupName -like "*OrganizationView*") {
@@ -1864,63 +2035,23 @@ foreach ($site in $sites) {
                                         "Content-Type"  = "application/json"
                                     }
                                     
-                                    $searchQuery = @{
-                                        requests = @(
-                                            @{
-                                                entityTypes               = @("driveItem")
-                                                query                     = @{
-                                                    queryString = "UniqueID:$documentId"
-                                                }
-                                                from                      = 0
-                                                size                      = 25
-                                                sharePointOneDriveOptions = @{
-
-                                                    includeContent = "sharedContent,privateContent"
-                                                }
-                                                region                    = $searchRegion
-                                            }
-                                        )
-                                    }
+                                    # Try to find the document via Microsoft Graph search using the document ID
+                                    $searchResult = Search-DocumentViaGraphAPI -DocumentId $documentId -SearchRegion $searchRegion -LogContext "Main processing loop - document search"
                                     
-                                    $searchBody = $searchQuery | ConvertTo-Json -Depth 5
-                                    $searchUrl = "https://graph.microsoft.com/v1.0/search/query"
+                                    Write-DebugLog -LogName $Log -LogEntryText "Search result for document ID $documentId - Found: $($searchResult.Found), URL: '$($searchResult.DocumentUrl)', Owner: '$($searchResult.DocumentOwner)', Type: '$($searchResult.ItemType)'"
                                     
-                                    $searchResults = Invoke-WithThrottleHandling -ScriptBlock {
-                                        Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Post -Body $searchBody
-                                    } -Operation "Microsoft Graph Search for document ID $documentId"
-                                    
-                                    if ($searchResults.value -and 
-                                        $searchResults.value[0].hitsContainers -and 
-                                        $searchResults.value[0].hitsContainers[0].hits -and 
-                                        $searchResults.value[0].hitsContainers[0].hits.Count -gt 0) {
-                                        
-                                        $hit = $searchResults.value[0].hitsContainers[0].hits[0]
-                                        $resource = $hit.resource
-                                        
-                                        if ($resource) {
-                                            # Use the WebUrl from the result if available
-                                            if ($resource.webUrl) {
-                                                $documentUrl = $resource.webUrl
-                                            }
-                                            
-                                            # Try to get the author/owner if available
-                                            if ($resource.createdBy.user.displayName) {
-                                                $ownerDisplayName = $resource.createdBy.user.displayName
-                                                $ownerEmail = $resource.createdBy.user.email
-                                                
-                                                if ($ownerEmail) {
-                                                    $documentOwner = "$ownerDisplayName <$ownerEmail>"
-                                                }
-                                                else {
-                                                    $documentOwner = $ownerDisplayName
-                                                }
-                                            }
-                                            
-                                            Write-LogEntry -LogName $Log -LogEntryText "Located document via Graph search: $documentUrl" -Level "DEBUG"
+                                    if ($searchResult.Found) {
+                                        if ($searchResult.DocumentUrl) {
+                                            $documentUrl = $searchResult.DocumentUrl
                                         }
-                                    }
-                                    else {
-                                        Write-LogEntry -LogName $Log -LogEntryText "No matching documents found in Graph search for ID: $documentId" -Level "DEBUG"
+                                        
+                                        if ($searchResult.DocumentOwner) {
+                                            $documentOwner = $searchResult.DocumentOwner
+                                        }
+                                        
+                                        if ($searchResult.ItemType) {
+                                            $documentItemType = $searchResult.ItemType
+                                        }
                                     }
                                 }
                                 else {
@@ -1938,16 +2069,17 @@ foreach ($site in $sites) {
                             }
                             
                             $siteCollectionData[$siteUrl]["DocumentDetails"][$spGroupName] = @{
-                                "DocumentId"     = $documentId
-                                "SharingType"    = $sharingType
-                                "DocumentUrl"    = $documentUrl
-                                "DocumentOwner"  = $documentOwner
-                                "SharedOn"       = $siteUrl
-                                "SharingLinkUrl" = "" # Will be populated when processing sharing links
-                                "ExpirationDate" = "" # Will be populated when processing sharing links
+                                "DocumentId"       = $documentId
+                                "SharingType"      = $sharingType
+                                "DocumentUrl"      = $documentUrl
+                                "DocumentOwner"    = $documentOwner
+                                "DocumentItemType" = $documentItemType
+                                "SharedOn"         = $siteUrl
+                                "SharingLinkUrl"   = "" # Will be populated when processing sharing links
+                                "ExpirationDate"   = "" # Will be populated when processing sharing links
                             }
                             
-                            Write-DebugLog -LogName $Log -LogEntryText "Stored sharing information for document ID $documentId"
+                            Write-DebugLog -LogName $Log -LogEntryText "Stored sharing information for document ID $documentId with URL: $documentUrl and Owner: $documentOwner"
                         }
                     }
                     catch {
@@ -2007,9 +2139,9 @@ if ($sitesWithSharingLinksCount -gt 0) {
     
     if ($convertOrganizationLinks) {
         Write-Host "Processed Organization sharing links on $organizationLinksProcessedCount sites" -ForegroundColor Green
-        Write-Host "  Sharing link removal: $(if ($RemoveSharingLink) { 'ENABLED - Links were removed' } else { 'DISABLED - Links were preserved' })" -ForegroundColor $(if ($RemoveSharingLink) { "Yellow" } else { "Cyan" })
-        Write-Host "  Group cleanup: $(if ($cleanupCorruptedSharingGroups) { 'ENABLED - Corrupted groups were cleaned up' } else { 'DISABLED - Corrupted groups were preserved' })" -ForegroundColor $(if ($cleanupCorruptedSharingGroups) { "Yellow" } else { "Cyan" })
-        Write-InfoLog -LogName $Log -LogEntryText "Processed Organization sharing links on $organizationLinksProcessedCount sites (RemoveSharingLink=$RemoveSharingLink, cleanupCorruptedSharingGroups=$cleanupCorruptedSharingGroups)"
+        Write-Host "  Mode: REMEDIATION - Links were converted to direct permissions and removed" -ForegroundColor Yellow
+        Write-Host "  Group cleanup: ENABLED - Empty sharing groups were cleaned up" -ForegroundColor Yellow
+        Write-InfoLog -LogName $Log -LogEntryText "Processed Organization sharing links on $organizationLinksProcessedCount sites in REMEDIATION mode (convertOrganizationLinks=$convertOrganizationLinks, cleanupCorruptedSharingGroups=$cleanupCorruptedSharingGroups)"
     }
 }
 else {
