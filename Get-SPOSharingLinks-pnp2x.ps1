@@ -1,25 +1,53 @@
 <#
 .SYNOPSIS
-    SharePoint Online Sharing Information Collection Tool
+    Detects and inventories SharePoint Online sharing links across the tenant (Detection Mode Only).
 
 .DESCRIPTION
-    This script collects comprehensive information about SharePoint Online sites and their sharing configurations,
-    with a special focus on external sharing links. It connects to SharePoint Online using app-only authentication
-    and processes sites either from a CSV file or by retrieving all sites in the tenant.
+    This lightweight script scans SharePoint Online sites to identify and inventory all sharing links, with a focus on Organization sharing links. 
+    This script is DETECTION ONLY and will never modify any permissions, remove sharing links, or clean up sharing groups.
+    The script supports scanning all sites in a tenant or a specific list of sites from a CSV file.
 
-.PARAMETER None
-    This script uses predefined variables that need to be set at the beginning of the script.
+.PARAMETER tenantname
+    The name of your Microsoft 365 tenant (without .onmicrosoft.com).
+
+.PARAMETER appID
+    The Entra (Azure AD) application ID used for authentication.
+
+.PARAMETER thumbprint
+    The certificate thumbprint for authentication.
+
+.PARAMETER tenant
+    The tenant ID (GUID) for your Microsoft 365 tenant.
+
+.PARAMETER searchRegion
+    The region for Microsoft Graph search operations (e.g., "NAM", "EUR").
+
+.PARAMETER debugLogging
+    When set to $true, the script logs detailed DEBUG operations for troubleshooting.
+    When set to $false, only INFO and ERROR operations are logged.
+
+.PARAMETER inputfile
+    Optional. Path to a CSV file containing SharePoint site URLs (one URL per line or with "URL" header).
+    If not specified, the script will process all sites in the tenant.
+
+.OUTPUTS
+    - CSV file containing detailed information about sharing links found
+    - Log file with operation details and errors
 
 .NOTES
-    File Name      : Get-SPOSharingLinks-pnp2x.ps1
-    Author         : Mike Lee
-    Date Created   : 7/1/25
-    Prerequisite   : 
-    -    PnP PowerShell module (Tested with PNP 2.12.0)
-    -    Microsoft Graph API permissions for app-only authentication
-            Graph: Files.Read.All (Application)
-            SharePoint: Sites.FullControl.All (Application) 
-    -    App registration in Entra ID with certificate
+    Authors: Mike Lee
+    Updated: 8/7/2025
+
+    - Requires PnP.PowerShell 2.x module
+    - Requires an Entra app registration with appropriate SharePoint permissions
+       - The app must have:
+        - Sharepoint:Sites.FullControl.All
+        - SharePoint:User.Read.All 
+        - Graph:Sites.FullControl.All
+        - Graph:Sites.Read.All
+        - Graph:Files.Read.All
+    - Requires a certificate for authentication
+    - For optimal performance, use a certificate-based app rather than client secret
 
 .Disclaimer: The sample scripts are provided AS IS without warranty of any kind. 
     Microsoft further disclaims all implied warranties including, without limitation, 
@@ -32,39 +60,13 @@
     to use the sample scripts or documentation, even if Microsoft has been advised of the possibility of such damages.
 
 .EXAMPLE
+    # Inventory all sharing links from all sites in the tenant
     .\Get-SPOSharingLinks-pnp2x.ps1
-    
-    Runs the script with the configured parameters to collect SharePoint site sharing information.
 
-.INPUTS
-    Optional CSV file with site URLs (sitelist.csv) in the format:
-    https://tenant.sharepoint.com/sites/site1
-    https://tenant.sharepoint.com/sites/site2
-
-.OUTPUTS
-    1. Main output CSV file - Contains basic information for all sites
-    2. Sharing links specific CSV file - Contains detailed information about sharing links including
-       document URLs, members with access, and document owners
-    3. Log file - Records the script's execution progress and any errors
-
-.FUNCTIONALITY
-    - Connects to SharePoint Online using app-only authentication
-    - Collects site information including Information Barrier settings
-    - Identifies sites with sharing links
-    - Extracts document IDs from sharing link groups
-    - Uses Microsoft Graph to locate documents being shared
-    - Identifies users with access to shared documents
-    - Consolidates and exports data in structured CSV format
-
-.NOTES
-    Required variables to configure before running:
-    - $tenantname : Your SharePoint tenant name (without .sharepoint.com)
-    - $appID : Entra App ID for authentication
-    - $thumbprint : Certificate thumbprint for app-only authentication
-    - $tenant : Tenant ID (GUID)
-
-    The script requires the PnP PowerShell module and appropriate permissions
-    for app-only authentication to SharePoint Online and Microsoft Graph API.
+.EXAMPLE
+    # Inventory sharing links from specific sites listed in a CSV file
+    $inputfile = "C:\temp\MySites.csv"
+    .\Get-SPOSharingLinks-pnp2x.ps1
 #>
 
 # ----------------------------------------------
@@ -74,25 +76,24 @@ $tenantname = "m365x61250205"                                   # This is your t
 $appID = "5baa1427-1e90-4501-831d-a8e67465f0d9"                 # This is your Entra App ID
 $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certificate thumbprint
 $tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"                # This is your Tenant ID
-$searchRegion = "NAM"                                          # Region for Microsoft Graph search
+$searchRegion = "NAM"                                           # Region for Microsoft Graph search
+$debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
 # Initialize Parameters - Do not change
 # ----------------------------------------------
 $sites = @()
 $inputfile = $null
-$outputfile = $null
 $log = $null
 $date = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 
 # ----------------------------------------------
 # Input / Output and Log Files
 # ----------------------------------------------
-$inputfile = $null #specify a CSV file with site URLs to process specific sites, or leave as $null to process all sites
-$outputfile = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "incremental.csv"
-$log = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + "logfile.log"
+$inputfile = "C:\temp\oversharedurls - Copy.txt" #If no input file specified, will process all sites in the tenant
+$log = "$env:TEMP\" + 'SPOSharingLinks_DetectionOnly_' + $date + '_' + "logfile.log"
 # Initialize sharing links output file
-$sharingLinksOutputFile = "$env:TEMP\" + 'SPO_SharingLinks_' + $date + '.csv'
+$sharingLinksOutputFile = "$env:TEMP\" + 'SPO_SharingLinks_DetectionOnly_' + $date + '.csv'
 
 # ----------------------------------------------
 # Logging Function
@@ -100,13 +101,55 @@ $sharingLinksOutputFile = "$env:TEMP\" + 'SPO_SharingLinks_' + $date + '.csv'
 Function Write-LogEntry {
     param(
         [string] $LogName,
-        [string] $LogEntryText
+        [string] $LogEntryText,
+        [string] $Level = "INFO" # INFO, DEBUG, ERROR
     )
-    if ($LogName -ne $null) {
-        # log the date and time in the text file along with the data passed
-        "$([DateTime]::Now.ToShortDateString()) $([DateTime]::Now.ToShortTimeString()) : $LogEntryText" | Out-File -FilePath $LogName -append;
+    
+    # Always log INFO and ERROR messages
+    # Only log DEBUG messages when debug logging is enabled
+    if ($Level -eq "ERROR" -or $Level -eq "INFO" -or ($Level -eq "DEBUG" -and $debugLogging)) {
+        if ($null -ne $LogName) {
+            # log the date and time in the text file along with the data passed
+            "$([DateTime]::Now.ToShortDateString()) $([DateTime]::Now.ToShortTimeString()) [$Level] : $LogEntryText" | Out-File -FilePath $LogName -append;
+        }
     }
 }
+
+# ----------------------------------------------
+# Logging Helper Functions
+# ----------------------------------------------
+Function Write-InfoLog {
+    param(
+        [string] $LogName,
+        [string] $LogEntryText
+    )
+    # Always log INFO messages
+    Write-LogEntry -LogName $LogName -LogEntryText $LogEntryText -Level "INFO"
+}
+
+Function Write-DebugLog {
+    param(
+        [string] $LogName,
+        [string] $LogEntryText
+    )
+    # Only log DEBUG messages when debug logging is enabled
+    Write-LogEntry -LogName $LogName -LogEntryText $LogEntryText -Level "DEBUG"
+}
+
+Function Write-ErrorLog {
+    param(
+        [string] $LogName,
+        [string] $LogEntryText
+    )
+    # Always log ERROR messages
+    Write-LogEntry -LogName $LogName -LogEntryText $LogEntryText -Level "ERROR"
+}
+
+# ----------------------------------------------
+# Script Mode Information
+# ----------------------------------------------
+Write-Host "Script is running in DETECTION-ONLY mode" -ForegroundColor Cyan
+Write-InfoLog -LogName $Log -LogEntryText "Script is running in DETECTION-ONLY mode - Only detecting and inventorying sharing links, no modifications will be made"
 
 # ----------------------------------------------
 # Connection Parameters
@@ -161,12 +204,12 @@ Function Invoke-WithThrottleHandling {
                     
                     if ($retryAfterHeader) {
                         $waitTime = [int]$retryAfterHeader
-                        Write-LogEntry -LogName $Log -LogEntryText "Throttling detected for $Operation. Retry-After header: $waitTime seconds."
+                        Write-DebugLog -LogName $Log -LogEntryText "Throttling detected for $Operation. Retry-After header: $waitTime seconds."
                     }
                     else {
                         # Use exponential backoff if no Retry-After header
                         $waitTime = [Math]::Pow(2, $retryCount) * 10
-                        Write-LogEntry -LogName $Log -LogEntryText "Throttling detected for $Operation. No Retry-After header. Using backoff: $waitTime seconds."
+                        Write-DebugLog -LogName $Log -LogEntryText "Throttling detected for $Operation. No Retry-After header. Using backoff: $waitTime seconds."
                     }
                 }
             }
@@ -180,12 +223,12 @@ Function Invoke-WithThrottleHandling {
                     $timeUnit = $matches[2]
                     
                     $waitTime = if ($timeUnit -eq "minutes") { $timeValue * 60 } else { $timeValue }
-                    Write-LogEntry -LogName $Log -LogEntryText "PnP throttling detected for $Operation. Waiting for $waitTime seconds."
+                    Write-DebugLog -LogName $Log -LogEntryText "PnP throttling detected for $Operation. Waiting for $waitTime seconds."
                 }
                 else {
                     # Use exponential backoff
                     $waitTime = [Math]::Pow(2, $retryCount) * 10
-                    Write-LogEntry -LogName $Log -LogEntryText "PnP throttling detected for $Operation. Using backoff: $waitTime seconds."
+                    Write-DebugLog -LogName $Log -LogEntryText "PnP throttling detected for $Operation. Using backoff: $waitTime seconds."
                 }
             }
             
@@ -194,7 +237,7 @@ Function Invoke-WithThrottleHandling {
                 
                 if ($retryCount -le $MaxRetries) {
                     Write-Host "  Throttling detected for $Operation. Retrying in $waitTime seconds... (Attempt $retryCount of $MaxRetries)" -ForegroundColor Yellow
-                    Write-LogEntry -LogName $Log -LogEntryText "Waiting $waitTime seconds before retry #$retryCount for $Operation."
+                    Write-DebugLog -LogName $Log -LogEntryText "Waiting $waitTime seconds before retry #$retryCount for $Operation."
                     Start-Sleep -Seconds $waitTime
                     continue
                 }
@@ -202,7 +245,7 @@ Function Invoke-WithThrottleHandling {
             
             # If we reach here, it's either not throttling or we've exceeded retries
             Write-Host "Error in $Operation (Retry #$retryCount): $errorMessage" -ForegroundColor Red
-            Write-LogEntry -LogName $Log -LogEntryText "Error in $Operation (Retry #$retryCount): $errorMessage"
+            Write-ErrorLog -LogName $Log -LogEntryText "Error in $Operation (Retry #$retryCount): $errorMessage"
             throw
         }
     }
@@ -216,11 +259,11 @@ Function Invoke-WithThrottleHandling {
 try {
     $adminUrl = 'https://' + $tenantname + '-admin.sharepoint.com'
     Connect-PnPOnline -Url $adminUrl @connectionParams
-    Write-LogEntry -LogName $Log -LogEntryText "Successfully connected to SharePoint Admin Center: $adminUrl"
+    Write-InfoLog -LogName $Log -LogEntryText "Successfully connected to SharePoint Admin Center: $adminUrl"
 }
 catch {
     Write-Host "Error connecting to SharePoint Admin Center ($adminUrl): $_" -ForegroundColor Red
-    Write-LogEntry -LogName $Log -LogEntryText "Error connecting to SharePoint Admin Center ($adminUrl): $_"
+    Write-ErrorLog -LogName $Log -LogEntryText "Error connecting to SharePoint Admin Center ($adminUrl): $_"
     exit
 }
 
@@ -228,36 +271,40 @@ catch {
 # Get Site List
 # ----------------------------------------------
 if ($inputfile -and (Test-Path -Path $inputfile)) {
+    Write-Host "Processing input file: $inputfile" -ForegroundColor Yellow
+    Write-InfoLog -LogName $Log -LogEntryText "Processing input file: $inputfile"
+    
     try {
+        # Simple site URL list handling
+        Write-Host "Input file appears to be a simple site URL list" -ForegroundColor Yellow
+        Write-InfoLog -LogName $Log -LogEntryText "Input file detected as simple site URL list"
         $sites = Import-csv -path $inputfile -Header 'URL'
-        Write-LogEntry -LogName $Log -LogEntryText "Using sites from input file: $inputfile"
-        Write-Host "Reading sites from input file: $inputfile" -ForegroundColor Yellow
     }
     catch {
         Write-Host "Error reading input file '$inputfile': $_" -ForegroundColor Red
-        Write-LogEntry -LogName $Log -LogEntryText "Error reading input file '$inputfile': $_"
+        Write-ErrorLog -LogName $Log -LogEntryText "Error reading input file '$inputfile': $_"
         exit
     }
 }
 else {
     Write-Host "Getting site list from tenant (this might take a while)..." -ForegroundColor Yellow
-    Write-LogEntry -LogName $Log -LogEntryText "Getting sites using Get-PnPTenantSite (no input file specified or found)"
+    Write-InfoLog -LogName $Log -LogEntryText "Getting sites using Get-PnPTenantSite (no input file specified or found)"
     try {
-        # Ensure we are connected to Admin Center before this call
+        # Get sites with optimized filtering to reduce memory usage and improve performance
         $sites = Invoke-WithThrottleHandling -ScriptBlock {
             Get-PnPTenantSite -IncludeOneDriveSites:$false | Where-Object {
                 $_.Template -notmatch "SRCHCEN|MYSITE|APPCATALOG|PWS|POINTPUBLISHINGTOPIC|SPSMSITEHOST|EHS|REVIEWCTR|TENANTADMIN" -and
                 $_.Status -eq "Active" -and
                 -not [string]::IsNullOrEmpty($_.Url)
             }
-        } -Operation "Get-PnPTenantSite"
+        } -Operation "Get-PnPTenantSite with optimized filtering"
         
-        Write-Host "Found $($sites.Count) sites." -ForegroundColor Green
-        Write-LogEntry -LogName $Log -LogEntryText "Retrieved $($sites.Count) sites using Get-PnPTenantSite."
+        Write-Host "Found $($sites.Count) sites for processing after filtering." -ForegroundColor Green
+        Write-InfoLog -LogName $log -LogEntryText "Retrieved and filtered to $($sites.Count) sites for processing."
     }
     catch {
         Write-Host "Error getting site list from tenant: $_" -ForegroundColor Red
-        Write-LogEntry -LogName $Log -LogEntryText "Error getting site list from tenant: $_"
+        Write-ErrorLog -LogName $Log -LogEntryText "Error getting site list from tenant: $_"
         exit
     }
 }
@@ -270,9 +317,9 @@ $siteCollectionData = @{}
 # ----------------------------------------------
 # Initialize the sharing links output file with headers
 # ----------------------------------------------
-$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,IsTeamsConnected,SharingCapability,Last Content Modified"
+$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,Filename,SharingType,Sharing Link URL,Link Expiration Date,IsTeamsConnected,SharingCapability,Last Content Modified,Link Removed"
 Set-Content -Path $sharingLinksOutputFile -Value $sharingLinksHeaders
-Write-LogEntry -LogName $Log -LogEntryText "Initialized sharing links output file: $sharingLinksOutputFile"
+Write-InfoLog -LogName $Log -LogEntryText "Initialized sharing links output file: $sharingLinksOutputFile"
 
 # ----------------------------------------------
 # Function to handle consolidated site data
@@ -347,7 +394,7 @@ Function Write-SiteSharingLinks {
     
     if ($sharingLinkGroups.Count -gt 0) {
         Write-Host "  Processing $($sharingLinkGroups.Count) sharing link groups for site: $SiteUrl" -ForegroundColor Yellow
-        Write-LogEntry -LogName $Log -LogEntryText "Processing $($sharingLinkGroups.Count) sharing link groups for site: $SiteUrl"
+        Write-InfoLog -LogName $Log -LogEntryText "Processing $($sharingLinkGroups.Count) sharing link groups for site: $SiteUrl"
         
         foreach ($sharingGroup in $sharingLinkGroups) {
             # Get users in this sharing links group
@@ -363,9 +410,63 @@ Function Write-SiteSharingLinks {
                 # Get document details if available
                 $documentUrl = "Not found"
                 $documentOwner = "Not found"
+                $documentItemType = "Not found"
+                $sharingLinkUrl = "Not found"
+                $linkExpirationDate = "Not found"
                 if ($SiteData.ContainsKey("DocumentDetails") -and $SiteData["DocumentDetails"].ContainsKey($sharingGroup)) {
                     $documentUrl = $SiteData["DocumentDetails"][$sharingGroup]["DocumentUrl"]
                     $documentOwner = $SiteData["DocumentDetails"][$sharingGroup]["DocumentOwner"]
+                    $documentItemType = $SiteData["DocumentDetails"][$sharingGroup]["DocumentItemType"]
+                    $sharingLinkUrl = $SiteData["DocumentDetails"][$sharingGroup]["SharingLinkUrl"]
+                    $linkExpirationDate = $SiteData["DocumentDetails"][$sharingGroup]["ExpirationDate"]
+                    Write-DebugLog -LogName $Log -LogEntryText "Retrieved document details for $sharingGroup - URL: $documentUrl, Owner: $documentOwner, Type: $documentItemType, LinkURL: $sharingLinkUrl, Expiration: $linkExpirationDate"
+                }
+                else {
+                    Write-DebugLog -LogName $Log -LogEntryText "No document details found for sharing group: $sharingGroup. DocumentDetails exists: $($SiteData.ContainsKey('DocumentDetails')), Group key exists: $(if ($SiteData.ContainsKey('DocumentDetails')) { $SiteData['DocumentDetails'].ContainsKey($sharingGroup) } else { 'N/A' })"
+                }
+                
+                # For detection-only mode, always set Link Removed to "False" since we never remove anything
+                $linkRemoved = "False"
+                
+                # Extract filename from the document URL
+                $filename = "Not found"
+                if ($documentUrl -ne "Not found" -and -not [string]::IsNullOrWhiteSpace($documentUrl)) {
+                    try {
+                        if ($documentUrl -match "DispForm\.aspx\?ID=(\d+)") {
+                            # This is a list item - try to get a meaningful name
+                            # For list items, we'll use "List Item" + ID as the filename
+                            $itemId = $matches[1]
+                            $filename = "List Item $itemId"
+                            
+                            # Try to extract list name for better context
+                            if ($documentUrl -match "/Lists/([^/]+)/DispForm\.aspx") {
+                                $listName = $matches[1]
+                                $filename = "$listName - Item $itemId"
+                            }
+                        }
+                        else {
+                            # This is a regular file - extract filename from URL
+                            $uri = [System.Uri]$documentUrl
+                            $pathParts = $uri.AbsolutePath.Split('/')
+                            $filename = $pathParts[$pathParts.Length - 1]
+                            
+                            # Decode URL encoding if present
+                            $filename = [System.Web.HttpUtility]::UrlDecode($filename)
+                        }
+                    }
+                    catch {
+                        Write-DebugLog -LogName $Log -LogEntryText "Could not extract filename from URL: $documentUrl. Error: $_"
+                        $filename = "Extraction Error"
+                    }
+                }
+                
+                # Determine sharing type based on sharing group name
+                $sharingType = "Unknown"
+                if ($sharingGroup -like "*Flexible*") {
+                    $sharingType = "Flexible"
+                }
+                elseif ($sharingGroup -like "*Organization*") {
+                    $sharingType = "Organization"
                 }
                 
                 # Create CSV line
@@ -379,239 +480,543 @@ Function Write-SiteSharingLinks {
                     "Sharing Link Members"  = $membersFormatted
                     "File URL"              = $documentUrl
                     "File Owner"            = $documentOwner
+                    "Filename"              = $filename
+                    "SharingType"           = $sharingType
+                    "Sharing Link URL"      = $sharingLinkUrl
+                    "Link Expiration Date"  = $linkExpirationDate
                     "IsTeamsConnected"      = $SiteData.IsTeamsConnected
                     "SharingCapability"     = $SiteData.SharingCapability
                     "Last Content Modified" = $SiteData.LastContentModifiedDate
+                    "Link Removed"          = $linkRemoved
                 }
                 
                 # Write directly to the CSV file
                 $csvLine | Export-Csv -Path $sharingLinksOutputFile -Append -NoTypeInformation -Force
-                Write-LogEntry -LogName $Log -LogEntryText "  Wrote sharing link data for group: $sharingGroup"
+                Write-DebugLog -LogName $Log -LogEntryText "  Wrote sharing link data for group: $sharingGroup"
             }
         }
     }
 }
 
 # ----------------------------------------------
+# Function to search for documents using Microsoft Graph API
+# ----------------------------------------------
+Function Search-DocumentViaGraphAPI {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $DocumentId,
+        [Parameter(Mandatory = $true)]
+        [string] $SearchRegion,
+        [Parameter(Mandatory = $false)]
+        [string] $LogContext = "Document search"
+    )
+    
+    $result = @{
+        Found         = $false
+        DocumentUrl   = ""
+        DocumentOwner = ""
+        ItemType      = ""
+    }
+    
+    try {
+        Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Searching for document ID: $DocumentId"
+        
+        $graphToken = Invoke-WithThrottleHandling -ScriptBlock {
+            Get-PnPGraphAccessToken
+        } -Operation "Get-PnPGraphAccessToken for $LogContext"
+        
+        if (-not $graphToken) {
+            Write-ErrorLog -LogName $Log -LogEntryText "$LogContext - Unable to get Graph access token"
+            return $result
+        }
+        
+        $headers = @{
+            "Authorization" = "Bearer $graphToken"
+            "Content-Type"  = "application/json"
+        }
+        
+        $searchUrl = "https://graph.microsoft.com/v1.0/search/query"
+        $itemFound = $false
+        
+        # First, try searching as driveItem (files in document libraries)
+        $driveItemSearchQuery = @{
+            requests = @(
+                @{
+                    entityTypes               = @("driveItem")
+                    query                     = @{
+                        queryString = "UniqueID:$DocumentId"
+                    }
+                    from                      = 0
+                    size                      = 25
+                    sharePointOneDriveOptions = @{
+                        includeContent = "sharedContent,privateContent"
+                    }
+                    region                    = $SearchRegion
+                }
+            )
+        }
+        
+        $searchBody = $driveItemSearchQuery | ConvertTo-Json -Depth 5
+        
+        $searchResults = Invoke-WithThrottleHandling -ScriptBlock {
+            Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Post -Body $searchBody
+        } -Operation "$LogContext - Microsoft Graph Search for document ID $DocumentId (driveItem)"
+        
+        Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Graph search response structure: value count = $(if ($searchResults.value) { $searchResults.value.Count } else { 'null' })"
+        
+        # Check if we found results with driveItem search
+        if ($searchResults.value -and 
+            $searchResults.value[0].hitsContainers -and 
+            $searchResults.value[0].hitsContainers[0].hits -and 
+            $searchResults.value[0].hitsContainers[0].hits.Count -gt 0) {
+            
+            $hit = $searchResults.value[0].hitsContainers[0].hits[0]
+            $resource = $hit.resource
+            
+            Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Found hit with resource. WebUrl: '$($resource.webUrl)', CreatedBy: '$($resource.createdBy.user.displayName)'"
+            
+            if ($resource) {
+                $result.Found = $true
+                $result.ItemType = "driveItem"
+                
+                # Use the WebUrl from the result if available
+                if ($resource.webUrl) {
+                    $result.DocumentUrl = $resource.webUrl
+                }
+                
+                # Try to get the author/owner if available
+                if ($resource.createdBy.user.displayName) {
+                    $ownerDisplayName = $resource.createdBy.user.displayName
+                    $ownerEmail = $resource.createdBy.user.email
+                    
+                    if ($ownerEmail) {
+                        $result.DocumentOwner = "$ownerDisplayName <$ownerEmail>"
+                    }
+                    else {
+                        $result.DocumentOwner = $ownerDisplayName
+                    }
+                }
+                
+                Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Located document via Graph search (driveItem): $($result.DocumentUrl)"
+                $itemFound = $true
+            }
+        }
+        
+        # If no results found with driveItem, try searching as listItem (SharePoint list items)
+        if (-not $itemFound) {
+            Write-DebugLog -LogName $Log -LogEntryText "$LogContext - No driveItem found, trying listItem search for ID: $DocumentId"
+            
+            $listItemSearchQuery = @{
+                requests = @(
+                    @{
+                        entityTypes               = @("listItem")
+                        query                     = @{
+                            queryString = "UniqueID:$DocumentId"
+                        }
+                        from                      = 0
+                        size                      = 25
+                        sharePointOneDriveOptions = @{
+                            includeContent = "sharedContent,privateContent"
+                        }
+                        region                    = $SearchRegion
+                    }
+                )
+            }
+            
+            $listItemSearchBody = $listItemSearchQuery | ConvertTo-Json -Depth 5
+            
+            $listItemSearchResults = Invoke-WithThrottleHandling -ScriptBlock {
+                Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Post -Body $listItemSearchBody
+            } -Operation "$LogContext - Microsoft Graph Search for document ID $DocumentId (listItem)"
+            
+            Write-DebugLog -LogName $Log -LogEntryText "$LogContext - List item search response structure: value count = $(if ($listItemSearchResults.value) { $listItemSearchResults.value.Count } else { 'null' })"
+            
+            if ($listItemSearchResults.value -and 
+                $listItemSearchResults.value[0].hitsContainers -and 
+                $listItemSearchResults.value[0].hitsContainers[0].hits -and 
+                $listItemSearchResults.value[0].hitsContainers[0].hits.Count -gt 0) {
+                
+                $hit = $listItemSearchResults.value[0].hitsContainers[0].hits[0]
+                $resource = $hit.resource
+                
+                Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Found list item hit with resource. WebUrl: '$($resource.webUrl)', CreatedBy: '$($resource.createdBy.user.displayName)'"
+                
+                if ($resource) {
+                    $result.Found = $true
+                    $result.ItemType = "listItem"
+                    
+                    # Use the WebUrl from the result if available
+                    if ($resource.webUrl) {
+                        $result.DocumentUrl = $resource.webUrl
+                    }
+                    
+                    # Try to get the author/owner if available
+                    if ($resource.createdBy.user.displayName) {
+                        $ownerDisplayName = $resource.createdBy.user.displayName
+                        $ownerEmail = $resource.createdBy.user.email
+                        
+                        if ($ownerEmail) {
+                            $result.DocumentOwner = "$ownerDisplayName <$ownerEmail>"
+                        }
+                        else {
+                            $result.DocumentOwner = $ownerDisplayName
+                        }
+                    }
+                    
+                    Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Located list item via Graph search (listItem): $($result.DocumentUrl)"
+                    $itemFound = $true
+                }
+            }
+            else {
+                Write-DebugLog -LogName $Log -LogEntryText "$LogContext - No matching items found in Graph search (both driveItem and listItem) for ID: $DocumentId"
+            }
+        }
+    }
+    catch {
+        Write-ErrorLog -LogName $Log -LogEntryText "$LogContext - Error searching for document via Graph API: $_"
+    }
+    
+    return $result
+}
+
+# ----------------------------------------------
+# Function to collect and store sharing link URLs for a site
+# ----------------------------------------------
+Function Get-SharingLinkUrls {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $SiteUrl
+    )
+    
+    Write-Host "  Collecting sharing link URLs for site: $SiteUrl" -ForegroundColor Cyan
+    Write-InfoLog -LogName $Log -LogEntryText "Collecting sharing link URLs for site: $SiteUrl"
+    
+    try {
+        # Connect to the specific site if not already connected
+        $currentConnection = Get-PnPConnection -ErrorAction SilentlyContinue
+        if (-not $currentConnection -or $currentConnection.Url -ne $SiteUrl) {
+            Connect-PnPOnline -Url $SiteUrl @connectionParams -ErrorAction Stop
+        }
+        
+        # Get all SharingLinks groups
+        $sharingGroups = Invoke-WithThrottleHandling -ScriptBlock {
+            Get-PnPGroup | Where-Object { $_.Title -like "SharingLinks*" }
+        } -Operation "Get sharing groups for $SiteUrl"
+        
+        if ($sharingGroups.Count -eq 0) {
+            Write-DebugLog -LogName $Log -LogEntryText "No sharing groups found on site: $SiteUrl"
+            return
+        }
+        
+        Write-Host "    Found $($sharingGroups.Count) sharing groups" -ForegroundColor Green
+        Write-InfoLog -LogName $Log -LogEntryText "Found $($sharingGroups.Count) sharing groups on site: $SiteUrl"
+        
+        foreach ($group in $sharingGroups) {
+            $groupName = $group.Title
+            
+            # Extract document ID from group name
+            $documentId = ""
+            if ($groupName -match "SharingLinks\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.") {
+                $documentId = $matches[1]
+                Write-DebugLog -LogName $Log -LogEntryText "Processing sharing group: $groupName with document ID: $documentId"
+                
+                # Check if we have document details for this group
+                if ($siteCollectionData[$SiteUrl].ContainsKey("DocumentDetails") -and 
+                    $siteCollectionData[$SiteUrl]["DocumentDetails"].ContainsKey($groupName) -and
+                    -not [string]::IsNullOrWhiteSpace($siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["DocumentUrl"])) {
+                    
+                    $docUrl = $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["DocumentUrl"]
+                    
+                    # Try to get sharing links using the document ID directly (works for both files and list items)
+                    try {
+                        $sharingLinks = $null
+                        $sharingLinkUrl = "Not found"
+                        $expirationDate = "No expiration"
+                        
+                        Write-DebugLog -LogName $Log -LogEntryText "Attempting to get sharing links using document ID: $documentId"
+                        
+                        # Use Get-PnPFileSharingLink with the document ID directly (works for both files and list items)
+                        $sharingLinks = Invoke-WithThrottleHandling -ScriptBlock {
+                            Get-PnPFileSharingLink -Identity $documentId -ErrorAction SilentlyContinue
+                        } -Operation "Get sharing links for document ID: $documentId"
+                        
+                        if ($sharingLinks -and $sharingLinks.Count -gt 0) {
+                            Write-DebugLog -LogName $Log -LogEntryText "Found $($sharingLinks.Count) sharing links for document"
+                            
+                            # Log the structure of the first sharing link object to help with debugging
+                            if ($debugLogging -and $sharingLinks[0]) {
+                                $firstLink = $sharingLinks[0]
+                                Write-DebugLog -LogName $Log -LogEntryText "Sharing link object properties: $(($firstLink | Get-Member -MemberType Property).Name -join ', ')"
+                                
+                                if ($firstLink.link) {
+                                    Write-DebugLog -LogName $Log -LogEntryText "Link property exists. Link properties: $(($firstLink.link | Get-Member -MemberType Property).Name -join ', ')"
+                                    if ($firstLink.link.WebUrl) {
+                                        Write-DebugLog -LogName $Log -LogEntryText "WebUrl found: $($firstLink.link.WebUrl)"
+                                    }
+                                    if ($firstLink.link.ExpirationDateTime) {
+                                        Write-DebugLog -LogName $Log -LogEntryText "ExpirationDateTime found: $($firstLink.link.ExpirationDateTime)"
+                                    }
+                                }
+                                else {
+                                    Write-DebugLog -LogName $Log -LogEntryText "Link property doesn't exist or is null"
+                                }
+                                
+                                # Also check for expiration date at the top level
+                                if ($firstLink.ExpirationDateTime) {
+                                    Write-DebugLog -LogName $Log -LogEntryText "Top-level ExpirationDateTime found: $($firstLink.ExpirationDateTime)"
+                                }
+                            }
+                            
+                            # Look for a matching sharing link
+                            $matchingLink = $sharingLinks | Where-Object { $_.Id -and $groupName -like "*$($_.Id)*" } | Select-Object -First 1
+                            
+                            if ($matchingLink) {
+                                # Get the WebUrl property of the sharing link from the link property
+                                $sharingLinkUrl = if ($matchingLink.link -and $matchingLink.link.WebUrl) { 
+                                    $matchingLink.link.WebUrl 
+                                }
+                                else { 
+                                    "Not found" 
+                                }
+                                
+                                # Get the expiration date of the sharing link
+                                if ($matchingLink.link -and $matchingLink.link.ExpirationDateTime) {
+                                    # Format the expiration date to a readable format
+                                    try {
+                                        $expDate = [DateTime]::Parse($matchingLink.link.ExpirationDateTime)
+                                        $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                    }
+                                    catch {
+                                        $expirationDate = $matchingLink.link.ExpirationDateTime
+                                        Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($matchingLink.link.ExpirationDateTime)"
+                                    }
+                                }
+                                elseif ($matchingLink.ExpirationDateTime) {
+                                    # Alternative location for expiration date
+                                    try {
+                                        $expDate = [DateTime]::Parse($matchingLink.ExpirationDateTime)
+                                        $expirationDate = $expDate.ToString("yyyy-MM-dd HH:mm:ss")
+                                    }
+                                    catch {
+                                        $expirationDate = $matchingLink.ExpirationDateTime
+                                        Write-DebugLog -LogName $Log -LogEntryText "Could not parse expiration date: $($matchingLink.ExpirationDateTime)"
+                                    }
+                                }
+                                
+                                # Store the results
+                                $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["SharingLinkUrl"] = $sharingLinkUrl
+                                $siteCollectionData[$SiteUrl]["DocumentDetails"][$groupName]["ExpirationDate"] = $expirationDate
+                                
+                                Write-DebugLog -LogName $Log -LogEntryText "Found sharing link URL for group $groupName - URL: $sharingLinkUrl, Expiration: $expirationDate"
+                            }
+                            else {
+                                Write-DebugLog -LogName $Log -LogEntryText "No matching sharing link found for group: $groupName"
+                            }
+                        }
+                        else {
+                            Write-DebugLog -LogName $Log -LogEntryText "No sharing links found for document at: $docUrl"
+                        }
+                    }
+                    catch {
+                        Write-DebugLog -LogName $Log -LogEntryText "Error getting sharing links for document: $_"
+                    }
+                }
+                else {
+                    Write-DebugLog -LogName $Log -LogEntryText "No document details found for group: $groupName"
+                }
+            }
+        }
+    }
+    catch {
+        Write-Host "  Error collecting sharing link URLs for site $SiteUrl : $_" -ForegroundColor Red
+        Write-ErrorLog -LogName $Log -LogEntryText "Error collecting sharing link URLs for site $SiteUrl : $_"
+    }
+}
+
 # Main Processing Loop
 # ----------------------------------------------
 $totalSites = $sites.Count
 $processedCount = 0
 $sitesWithSharingLinksCount = 0
 
+# Display script mode information before starting site processing
+Write-Host ""
+Write-Host "======================================================" -ForegroundColor Cyan
+Write-Host "SCRIPT MODE: DETECTION-ONLY" -ForegroundColor Cyan
+Write-Host "  - Only DETECTING and INVENTORYING sharing links" -ForegroundColor Cyan
+Write-Host "  - NO modifications will be made to permissions or sharing links" -ForegroundColor Cyan
+Write-Host "  - Results will be saved to: $sharingLinksOutputFile" -ForegroundColor Cyan
+Write-Host "======================================================" -ForegroundColor Cyan
+Write-Host ""
+Write-InfoLog -LogName $Log -LogEntryText "Starting to process $totalSites sites in DETECTION-ONLY mode"
+
 foreach ($site in $sites) {
     $processedCount++
-    $siteUrl = $site.Url
+    $siteUrl = ""
     
-    Write-Host "Processing site $processedCount/$totalSites : $siteUrl" -ForegroundColor Cyan
-    Write-LogEntry -LogName $Log -LogEntryText "Processing site $processedCount/$totalSites : $siteUrl"
-
+    # Handle both input file format and Get-PnPTenantSite format
+    if ($site.URL) {
+        $siteUrl = $site.URL
+    }
+    elseif ($site.Url) {
+        $siteUrl = $site.Url
+    }
+    else {
+        $siteUrl = $site.ToString()
+    }
+    
+    # Skip if empty URL
+    if ([string]::IsNullOrWhiteSpace($siteUrl)) {
+        continue
+    }
+    
+    Write-Host "Processing site $processedCount of $totalSites : $siteUrl" -ForegroundColor Green
+    Write-InfoLog -LogName $Log -LogEntryText "Processing site $processedCount of $totalSites : $siteUrl"
+    
     try {
-        # Get Site Properties using the Admin connection context
-        Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop # Ensure admin context
-        $siteprops = Invoke-WithThrottleHandling -ScriptBlock {
-            Get-PnPTenantSite -Identity $siteUrl
-        } -Operation "Get-PnPTenantSite for $siteUrl" | 
-        Select-Object Url, Owner, InformationBarrierMode, InformationBarrierSegments, 
-        Template, SharingCapability, IsTeamsConnected, LastContentModifiedDate
-
-        if ($null -eq $siteprops) { 
-            Write-LogEntry -LogName $Log -LogEntryText "Failed to retrieve properties for site $siteUrl. Skipping."
-            continue 
-        }
-
-        # Initialize site data with basic properties
-        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops
-
-        # Connect to the specific site for group/user information
+        # Connect to the specific site to get groups and users
         try {
-            $currentPnPConnection = Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
-            Write-LogEntry -LogName $Log -LogEntryText "Successfully connected to site: $siteUrl"
+            Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
             
-            # SharePoint Group Processing
+            # Get Site Properties using SharePoint Admin connection
+            Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop
+            $siteProperties = Invoke-WithThrottleHandling -ScriptBlock {
+                Get-PnPTenantSite -Identity $siteUrl
+            } -Operation "Get site properties for $siteUrl"
+            
+            # Connect back to the site for group processing
+            Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
+            
+            # Initialize site data
+            Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteProperties
+            
+            # Get all groups for this site
             $spGroups = Invoke-WithThrottleHandling -ScriptBlock {
                 Get-PnPGroup
-            } -Operation "Get-PnPGroup for $siteUrl"
+            } -Operation "Get groups for site $siteUrl"
             
-            Write-LogEntry -LogName $Log -LogEntryText "Found $($spGroups.Count) SP Groups on $siteUrl"
-            
-            ForEach ($spGroup in $spGroups) {
-                if (!$spGroup -or !$spGroup.Title) { continue }
-                
+            foreach ($spGroup in $spGroups) {
                 $spGroupName = $spGroup.Title
                 
-                # Check if this is a sharing links group and add to collection
-                if ($spGroupName -like "SharingLinks*") {
-                    Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops -SPGroupName $spGroupName
-                    
-                    # Get SP Group Members for sharing links groups only
-                    if ($spGroup.Id) { 
-                        $spGroupMembers = Invoke-WithThrottleHandling -ScriptBlock {
-                            Get-PnPGroupMember -Identity $spGroup.Id
-                        } -Operation "Get-PnPGroupMember for group $($spGroup.Title)"
-                        
-                        foreach ($member in $spGroupMembers) {
-                            if (!$member -or !$member.LoginName) { continue }
-                            
-                            try {
-                                $pnpUser = Invoke-WithThrottleHandling -ScriptBlock {
-                                    Get-PnPUser -Identity $member.LoginName -ErrorAction SilentlyContinue
-                                } -Operation "Get-PnPUser for $($member.LoginName)"
-                                
-                                if ($pnpUser) {
-                                    $spUserName = $pnpUser.Title
-                                    $spUserEmail = $pnpUser.Email
-                                    
-                                    # Call Update-SiteCollectionData for the specific user/group combo
-                                    Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops `
-                                        -AssociatedSPGroup $spGroupName -SPUserName $spUserName `
-                                        -SPUserTitle $pnpUser.Title -SPUserEmail $spUserEmail
-                                }
-                                else {
-                                    # Fallback to member title
-                                    Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteprops `
-                                        -AssociatedSPGroup $spGroupName -SPUserName $member.Title `
-                                        -SPUserTitle $member.Title
-                                }
-                            }
-                            catch { 
-                                Write-LogEntry -LogName $Log -LogEntryText "Error processing member '$($member.LoginName)': ${_}"
-                            }
-                        }
+                # Update site data with group information
+                Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteProperties -SPGroupName $spGroupName
+                
+                # Get users in each group
+                $spUsers = Invoke-WithThrottleHandling -ScriptBlock {
+                    Get-PnPGroupMember -Identity $spGroup.Id
+                } -Operation "Get members for group $spGroupName"
+                
+                foreach ($spUser in $spUsers) {
+                    if ($spUser -and $spUser.LoginName) {
+                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteProperties -AssociatedSPGroup $spGroupName -SPUserName $spUser.LoginName -SPUserTitle $spUser.Title -SPUserEmail $spUser.Email
                     }
-                    
-                    # Extract document ID and other sharing info from sharing link group name
+                }
+                
+                # Extract document information from sharing groups
+                if ($spGroupName -like "SharingLinks*") {
                     try {
-                        # Extract document ID if present in the sharing group name
-                        if ($spGroupName -match "SharingLinks\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([^.]+)") {
+                        # Extract document ID from sharing group name
+                        if ($spGroupName -match "SharingLinks\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.") {
                             $documentId = $matches[1]
-                            $sharingType = $matches[2]  # e.g. "Flexible", "View", "Edit"
+                            Write-DebugLog -LogName $Log -LogEntryText "Extracted document ID: $documentId from sharing group: $spGroupName"
+                            $sharingType = "Unknown"
+                            $documentUrl = ""
+                            $documentOwner = ""
+                            $documentItemType = ""
                             
-                            Write-LogEntry -LogName $Log -LogEntryText "Found document ID in sharing link: $documentId, Sharing Type: $sharingType"
+                            # Determine sharing type from group name
+                            if ($spGroupName -like "*OrganizationView*") {
+                                $sharingType = "OrganizationView"
+                            }
+                            elseif ($spGroupName -like "*OrganizationEdit*") {
+                                $sharingType = "OrganizationEdit"
+                            }
+                            elseif ($spGroupName -like "*AnonymousAccess*") {
+                                $sharingType = "AnonymousAccess"
+                            }
                             
-                            # Try to find the document using Microsoft Graph Search API
+                            # Try to find the document using Microsoft Graph
                             try {
-                                # Get an access token for Microsoft Graph
                                 $graphToken = Invoke-WithThrottleHandling -ScriptBlock {
                                     Get-PnPGraphAccessToken
-                                } -Operation "Get-PnPGraphAccessToken"
+                                } -Operation "Get-PnPGraphAccessToken for document search"
                                 
                                 if ($graphToken) {
-                                    # Prepare headers with the access token
                                     $headers = @{
                                         "Authorization" = "Bearer $graphToken"
                                         "Content-Type"  = "application/json"
                                     }
                                     
-                                    # Prepare the search query as a PowerShell hashtable (easier to read and modify)
-                                    $searchQuery = @{
-                                        requests = @(
-                                            @{
-                                                entityTypes               = @("driveItem")
-                                                query                     = @{
-                                                    queryString = "UniqueID:$documentId"
-                                                }
-                                                from                      = $start
-                                                size                      = $size
-                                                sharePointOneDriveOptions = @{
-                                                    includeContent = "sharedContent,privateContent"
-                                                }
-                                                region                    = $searchRegion
-                                            }
-                                        )
-                                    }
+                                    # Try to find the document via Microsoft Graph search using the document ID
+                                    $searchResult = Search-DocumentViaGraphAPI -DocumentId $documentId -SearchRegion $searchRegion -LogContext "Main processing loop - document search"
                                     
-                                    # Convert the hashtable to JSON
-                                    $searchBody = $searchQuery | ConvertTo-Json -Depth 5
+                                    Write-DebugLog -LogName $Log -LogEntryText "Search result for document ID $documentId - Found: $($searchResult.Found), URL: '$($searchResult.DocumentUrl)', Owner: '$($searchResult.DocumentOwner)', Type: '$($searchResult.ItemType)'"
                                     
-                                    # Execute the search query with throttling handling
-                                    Write-LogEntry -LogName $Log -LogEntryText "Executing Microsoft Graph search for document ID: $documentId"
-                                    $searchUrl = "https://graph.microsoft.com/v1.0/search/query"
-                                    
-                                    $searchResults = Invoke-WithThrottleHandling -ScriptBlock {
-                                        Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Post -Body $searchBody
-                                    } -Operation "Microsoft Graph Search API call for document ID $documentId"
-                                    
-                                    # Process search results
-                                    $documentUrl = "Unable to locate document across tenant"
-                                    $documentOwner = "Unknown - Document ID: $documentId"
-                                    
-                                    if ($searchResults.value -and 
-                                        $searchResults.value[0].hitsContainers -and 
-                                        $searchResults.value[0].hitsContainers[0].hits -and 
-                                        $searchResults.value[0].hitsContainers[0].hits.Count -gt 0) {
-                                        
-                                        $hit = $searchResults.value[0].hitsContainers[0].hits[0]
-                                        $resource = $hit.resource
-                                        
-                                        if ($resource) {
-                                            # Use the WebUrl from the result if available
-                                            if ($resource.webUrl) {
-                                                $documentUrl = $resource.webUrl
-                                            }
-                                            
-                                            # Try to get the author/owner if available
-                                            if ($resource.createdBy.user.displayName) {
-                                                $ownerDisplayName = $resource.createdBy.user.displayName
-                                                $ownerEmail = $resource.createdBy.user.email
-                                                
-                                                if ($ownerEmail) {
-                                                    $documentOwner = "$ownerDisplayName <$ownerEmail>"
-                                                }
-                                                else {
-                                                    $documentOwner = $ownerDisplayName
-                                                }
-                                            }
-                                            
-                                            Write-LogEntry -LogName $Log -LogEntryText "Located document via Graph search: $documentUrl"
+                                    if ($searchResult.Found) {
+                                        if ($searchResult.DocumentUrl) {
+                                            $documentUrl = $searchResult.DocumentUrl
                                         }
-                                    }
-                                    else {
-                                        Write-LogEntry -LogName $Log -LogEntryText "No matching documents found in Graph search for ID: $documentId"
+                                        
+                                        if ($searchResult.DocumentOwner) {
+                                            $documentOwner = $searchResult.DocumentOwner
+                                        }
+                                        
+                                        if ($searchResult.ItemType) {
+                                            $documentItemType = $searchResult.ItemType
+                                        }
                                     }
                                 }
                                 else {
-                                    Write-LogEntry -LogName $Log -LogEntryText "Unable to get Graph access token for document search."
+                                    Write-LogEntry -LogName $Log -LogEntryText "Unable to get Graph access token for document search." -Level "ERROR"
                                 }
                             }
                             catch {
-                                Write-LogEntry -LogName $Log -LogEntryText "Error searching for document via Graph API: ${_}"
+                                Write-ErrorLog -LogName $Log -LogEntryText "Error searching for document via Graph API: ${_}"
                             }
                             
                             # Store the sharing link information 
                             if (-not $siteCollectionData[$siteUrl].ContainsKey("DocumentDetails")) {
-                                $siteCollectionData[$siteUrl]["DocumentDetails"] = @{}
+                                $siteCollectionData[$siteUrl]["DocumentDetails"] = @{
+                                }
                             }
                             
                             $siteCollectionData[$siteUrl]["DocumentDetails"][$spGroupName] = @{
-                                "DocumentId"    = $documentId
-                                "SharingType"   = $sharingType
-                                "DocumentUrl"   = $documentUrl
-                                "DocumentOwner" = $documentOwner
-                                "SharedOn"      = $siteUrl
+                                "DocumentId"       = $documentId
+                                "SharingType"      = $sharingType
+                                "DocumentUrl"      = $documentUrl
+                                "DocumentOwner"    = $documentOwner
+                                "DocumentItemType" = $documentItemType
+                                "SharedOn"         = $siteUrl
+                                "SharingLinkUrl"   = "" # Will be populated when processing sharing links
+                                "ExpirationDate"   = "" # Will be populated when processing sharing links
                             }
                             
-                            Write-LogEntry -LogName $Log -LogEntryText "Stored sharing information for document ID $documentId"
+                            Write-DebugLog -LogName $Log -LogEntryText "Stored sharing information for document ID $documentId with URL: $documentUrl and Owner: $documentOwner"
                         }
                     }
                     catch {
-                        Write-LogEntry -LogName $Log -LogEntryText "Error extracting document ID from group name $($spGroupName) : ${_}"
+                        Write-ErrorLog -LogName $Log -LogEntryText "Error extracting document ID from group name $($spGroupName) : ${_}"
                     }
                 }
             }
 
             # Process and write sharing links data for this site immediately if any found
             if ($siteCollectionData[$siteUrl]["Has Sharing Links"]) {
-                Write-SiteSharingLinks -SiteUrl $siteUrl -SiteData $siteCollectionData[$siteUrl]
                 $sitesWithSharingLinksCount++
+                
+                # Collect sharing link URLs for this site
+                Get-SharingLinkUrls -SiteUrl $siteUrl
+                
+                # Write sharing links data for this site
+                Write-SiteSharingLinks -SiteUrl $siteUrl -SiteData $siteCollectionData[$siteUrl]
             }
         }
         catch { 
-            Write-LogEntry -LogName $Log -LogEntryText "Could not connect to site $siteUrl : ${_}" 
+            Write-ErrorLog -LogName $Log -LogEntryText "Could not connect to site $siteUrl : ${_}" 
         }
     }
     catch {
-        Write-LogEntry -LogName $Log -LogEntryText "Error processing site $siteUrl : ${_}"
+        Write-ErrorLog -LogName $Log -LogEntryText "Error processing site $siteUrl : ${_}"
         continue
     }
 }
@@ -621,20 +1026,20 @@ foreach ($site in $sites) {
 # ----------------------------------------------
 Write-Host "Consolidating results..." -ForegroundColor Green
 
-# No incremental file generation - only focus on sharing links output
 if ($sitesWithSharingLinksCount -gt 0) {
     Write-Host "Found $sitesWithSharingLinksCount site collections with sharing links" -ForegroundColor Green
     Write-Host "Sharing links data written to: $sharingLinksOutputFile" -ForegroundColor Green
-    Write-LogEntry -LogName $Log -LogEntryText "Total sites with sharing links: $sitesWithSharingLinksCount"
+    Write-InfoLog -LogName $Log -LogEntryText "Total sites with sharing links: $sitesWithSharingLinksCount"
+    Write-Host "  Mode: DETECTION-ONLY - No modifications were made to permissions or sharing links" -ForegroundColor Cyan
 }
 else {
     Write-Host "No site collections with sharing links found." -ForegroundColor Yellow
-    Write-LogEntry -LogName $Log -LogEntryText "No site collections with sharing links found."
+    Write-InfoLog -LogName $Log -LogEntryText "No site collections with sharing links found."
 }
 
 # ----------------------------------------------
 # Disconnect and finish
 # ----------------------------------------------
 Disconnect-PnPOnline
-Write-LogEntry -LogName $Log -LogEntryText "Script finished."
+Write-InfoLog -LogName $Log -LogEntryText "Script finished."
 Write-Host "Script finished. Log file located at: $log" -ForegroundColor Green
