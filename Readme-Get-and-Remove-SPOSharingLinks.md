@@ -1,11 +1,20 @@
+- **Detection mode output (CSV) cannot be used as input for remediation.**  
+- Two modes: Detection (inventory/report) and Remediation (direct action).  
+- Input for remediation must be a simple list of site URLs, NOT a detection report.
+
+---
+
 # SharePoint Online Sharing Links Management Scripts
 
-> **⚠️ WARNING:** Removing sharing links (`Remediation` mode) is a permanent action. Any links previously shared will stop working immediately.
+> **⚠️ WARNING:** Removing sharing links in Remediation mode is permanent. Any previously distributed links will stop working immediately.
 
 ## Overview
 
-These PowerShell scripts provide a robust, auditable way to inventory and remediate sharing links across all SharePoint Online sites in your Microsoft 365 tenant. They support a two-step workflow—first reporting, then selectively converting Organization sharing links to direct permissions and optionally removing sharing links and cleaning up empty/corrupted sharing groups.
+These PowerShell scripts help you inventory and remediate Organization sharing links across SharePoint Online in Microsoft 365.  
+- **Detection mode** inventories all sharing links and outputs a CSV report.  
+- **Remediation mode** converts users with Organization sharing links to direct permissions and removes those links/groups.
 
+There are two script versions:
 - **Get-and-Remove-SPOSharingLinks-pnp2x.ps1** – For PnP.PowerShell 2.x
 - **Get-and-Remove-SPOSharingLinks-pnp3x.ps1** – For PnP.PowerShell 3.x
 
@@ -13,32 +22,29 @@ These PowerShell scripts provide a robust, auditable way to inventory and remedi
 
 ## Features
 
-- **Comprehensive Inventory:** Scans all or selected SharePoint sites for sharing links, focusing on Organization links.
-- **Targeted Remediation:** Converts users with Organization links into direct document or site permissions.
-- **Safe Two-Step Workflow:** Run in Detection (report-only) mode first, then Remediation mode based on your review of the results.
-- **Automatic Group Cleanup:** Removes empty or corrupted sharing groups in remediation.
-- **Throttling-Resilient:** Built-in retry and exponential backoff logic for large environments.
-- **Flexible Input:** Process all sites, a list of URLs, or a previous report CSV for precise targeting.
-- **Detailed Output & Logging:** CSV report and log file (INFO, DEBUG, ERROR), suitable for audits.
-- **Supports Modern Authentication:** Uses certificate-based Entra ID (Azure AD) app authentication.
+- **Inventory:** Scan all or specific SharePoint sites for sharing links, focusing on Organization links.
+- **Remediation:** Convert users with Organization links to direct permissions and remove those sharing groups/links.
+- **Automatic Cleanup:** Removes empty/corrupted sharing groups during remediation.
+- **Robust Logging:** Writes INFO, DEBUG (if enabled), and ERROR logs for audit and troubleshooting.
+- **Throttling Resilience:** Built-in exponential backoff and retry to handle SharePoint/Graph throttling.
+- **Flexible Input:** Remediation can target all sites or a custom list from a simple CSV file of site URLs.
+- **Modern Auth:** Uses certificate-based Entra ID (Azure AD) app authentication.
 
 ---
 
 ## Prerequisites
 
 - **PowerShell 7+**
-- **PnP.PowerShell** (version 2.x or 3.x, matching your chosen script)
-- **Microsoft 365 Tenant** with SharePoint Online
-- **Entra ID Application Registration** (with certificate)
+- **PnP.PowerShell** (version 2.x or 3.x, matching the script)
+- **Entra ID (Azure AD) App Registration**
     - Application Permissions:
         - `SharePoint:Sites.FullControl.All`
         - `SharePoint:User.Read.All`
         - `Graph:Sites.FullControl.All`
         - `Graph:Sites.Read.All`
         - `Graph:Files.Read.All`
-    - Certificate uploaded to the app registration
-
-- **Administrator Permissions:** You must be a SharePoint or Global Administrator.
+    - Certificate uploaded to app registration
+- **SharePoint/Global Admin** permissions
 
 ---
 
@@ -50,17 +56,16 @@ These PowerShell scripts provide a robust, auditable way to inventory and remedi
    ```
 
 2. **Download the Script**  
-   Download the script version matching your PnP.PowerShell installation.
+   Get the version matching your PnP.PowerShell install.
 
 3. **Set Up Entra ID App & Certificate**  
-   - Register a new app in Entra ID (Azure AD); upload your certificate.
+   - Register a new app in Entra ID (Azure AD) and upload your certificate.
    - Grant required API permissions and admin consent.
 
 4. **Export and Note Certificate Thumbprint**  
    ```powershell
    $cert = New-SelfSignedCertificate -Subject "CN=SPOScripts" -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable
    $cert.Thumbprint
-   # Export public part to .cer for upload
    Export-Certificate -Cert $cert -FilePath "C:\Temp\SPOScripts.cer"
    ```
 
@@ -68,7 +73,7 @@ These PowerShell scripts provide a robust, auditable way to inventory and remedi
 
 ## Configuration
 
-Open the script in your editor. Update the following variables at the top:
+Open the script and update the variables at the top:
 
 ```powershell
 $tenantname = "yourtenant"        # Without '.onmicrosoft.com'
@@ -76,69 +81,69 @@ $appID = "your-app-id"            # Entra App ID
 $thumbprint = "your-cert-thumb"   # Certificate thumbprint
 $tenant = "your-tenant-id"        # Directory (tenant) ID (GUID)
 $searchRegion = "NAM"             # "NAM", "EUR", etc.
-$Mode = "Detection"               # "Detection" (report) or "Remediation" (convert/remove)
-$debugLogging = $false            # $true for verbose logs, $false for info/errors only
-$inputfile = ""                   # Optional path to CSV of site URLs or previous report
+$Mode = "Detection"               # "Detection" or "Remediation"
+$debugLogging = $false            # $true for debug logs, $false for info/errors only
+$inputfile = ""                   # Optional: simple CSV of site URLs for targeted processing
 ```
 
 ---
 
 ## Script Parameters & Modes
 
-| Parameter                    | Type     | Default     | Description                                                                      |
-|------------------------------|----------|-------------|----------------------------------------------------------------------------------|
-| `$tenantname`                | String   | (required)  | Your M365 tenant (no `.onmicrosoft.com`)                                         |
-| `$appID`                     | String   | (required)  | Entra ID application ID                                                          |
-| `$thumbprint`                | String   | (required)  | Certificate thumbprint for authentication                                        |
-| `$tenant`                    | String   | (required)  | Directory (tenant) ID                                                            |
-| `$searchRegion`              | String   | "NAM"       | Microsoft Graph search region                                                    |
-| `$Mode`                      | String   | "Detection" | "Detection" = report only, "Remediation" = convert/remove org links              |
-| `$debugLogging`              | Boolean  | $false      | $true for debug-level logs                                                       |
-| `$inputfile`                 | String   | ""          | Optional path to CSV of site URLs or script CSV output for targeted remediation   |
+| Parameter         | Type     | Required?  | Description                                                   |
+|-------------------|----------|------------|---------------------------------------------------------------|
+| `$tenantname`     | String   | Yes        | Your M365 tenant (no `.onmicrosoft.com`)                      |
+| `$appID`          | String   | Yes        | Entra ID application ID                                       |
+| `$thumbprint`     | String   | Yes        | Certificate thumbprint for authentication                     |
+| `$tenant`         | String   | Yes        | Directory (tenant) ID                                         |
+| `$searchRegion`   | String   | No         | Microsoft Graph search region                                 |
+| `$Mode`           | String   | Yes        | `"Detection"` = report only, `"Remediation"` = convert/remove |
+| `$debugLogging`   | Boolean  | No         | `$true` for debug-level logs                                  |
+| `$inputfile`      | String   | No         | Optional: simple CSV of site URLs to process                  |
 
-**Automatic Behavior:**
-- If you provide a previous report CSV as `$inputfile`, the script will:
-    - Filter for sites with Organization sharing links only
-    - Automatically switch to Remediation mode
+**Important:**
+- When using `$inputfile`, it must be a plain list of site URLs (one per line, or a CSV with "URL" as the header).
+- **The output CSV from Detection mode is NOT valid as input for Remediation mode.**
+- Remediation mode will process ALL sites if `$inputfile` is blank.
 
 ---
 
 ## Usage
 
-### Step 1: Inventory (Detection Mode)
+### Detection (Inventory) Mode
 
 ```powershell
-# Set as follows:
 $Mode = "Detection"
-$inputfile = ""   # or provide a list of site URLs (CSV, one per line or with "URL" header)
-.\Get-and-Remove-SPOSharingLinks-pnp3x.ps1    # or -pnp2x.ps1
+$inputfile = ""   # or a simple CSV list of site URLs
+.\Get-and-Remove-SPOSharingLinks-pnp3x.ps1    # Or -pnp2x.ps1
 ```
-- Generates a detailed CSV in your `%TEMP%` folder listing all discovered sharing links.
+- Outputs a CSV report of all detected sharing links.  
+- **The report is for review only; it cannot be used as remediation input.**
 
-### Step 2: Review Report
-
-- Open the CSV report.
-    - "Sharing Group Name" containing "Organization" are candidates for remediation.
-    - Review links, users, and impacted files.
-
-### Step 3: Remediate (Convert/Remove Organization Links)
-
-```powershell
-# Use the previous report for targeted remediation:
-$Mode = "Detection"           # The script will auto-enable Remediation mode for its own CSV format
-$inputfile = "C:\Temp\SPO_SharingLinks_YYYY-MM-DD_HH-MM-SS.csv"
-.\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
-```
-- Only Organization links are targeted. The script converts users to direct permissions and removes the corresponding sharing groups and links.
-
-### Step 4: Optional – Full Tenant Remediation
+### Remediation Mode
 
 ```powershell
 $Mode = "Remediation"
-$inputfile = ""   # Leave empty to process all sites
-.\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
+$inputfile = ""   # Or a simple CSV list of SharePoint site URLs only
+.\Get-and-Remove-SPOSharingLinks-pnp3x.ps1    # Or -pnp2x.ps1
 ```
-- **CAUTION:** This will process ALL sites in the tenant and remove all Organization sharing links.
+- Converts users with Organization sharing links to direct permissions and removes links/groups for ALL specified sites.
+
+### Custom Remediation (Subset of Sites)
+
+If you want to remediate only certain sites:
+1. Create a CSV file (e.g., `mysites.csv`) with:
+   ```
+   URL
+   https://yourtenant.sharepoint.com/sites/site1
+   https://yourtenant.sharepoint.com/sites/site2
+   ```
+2. Set:
+   ```powershell
+   $Mode = "Remediation"
+   $inputfile = "C:\Path\To\mysites.csv"
+   ```
+3. Run the script.
 
 ---
 
@@ -146,67 +151,68 @@ $inputfile = ""   # Leave empty to process all sites
 
 - **CSV Report:**  
   `%TEMP%\SPO_SharingLinks_YYYY-MM-DD_HH-MM-SS.csv`  
-  Columns: Site URL, Site Owner, Sharing Group Name, Members, File/Item URL, Owner, Link URL, Link Expiration, and more.
+  (Generated in Detection mode for inventory/review only.)
 
 - **Log File:**  
   `%TEMP%\SPOSharingLinksYYYY-MM-DD_HH-MM-SS_logfile.log`  
-  Levels: INFO, DEBUG (if enabled), ERROR
+  (INFO, DEBUG [if enabled], ERROR)
 
 ---
 
-## Best Practices
+## Limitations & Important Notes
 
-- **Always start in Detection mode.** Review the report before any remediation.
-- **Use input files** to target specific sites or Organization links.
-- **Test in a non-production tenant** before broad use.
-- **Keep log files** for audit and troubleshooting.
-- **Preserve sharing links** if unsure: Only set `$Mode = "Remediation"` once you are confident.
+- **You CANNOT use the Detection mode report as input for Remediation mode.**  
+  Remediation only accepts a plain list of site URLs.
+- **Remediation always removes Organization sharing links after converting users.**  
+  This is a permanent action!
+- **Always start with Detection mode and review the report before remediation.**
+- **Test in a non-production tenant before broad usage.**
 
 ---
 
 ## Troubleshooting
 
-- **Authentication errors:** Ensure your app registration, certificate, and permissions are correct.
+- **Authentication errors:** Verify app registration, certificate, and permissions.
 - **Throttling:** The script automatically retries, but for large tenants, consider splitting input files.
 - **Permission issues:** Confirm app permissions and admin consent.
-- **Debug logs:** Set `$debugLogging = $true` for troubleshooting.
+- **Enable `$debugLogging = $true` for troubleshooting.**
 
 ---
 
 ## Security & Compliance
 
 - Store certificates securely.
-- Limit access to the app registration and script.
+- Limit script/app access.
 - Clean up temporary files after processing.
-- Document changes and script runs for compliance.
+- Document script runs for compliance.
 
 ---
 
 ## FAQ
 
-**Q: Can I convert users but keep sharing links active?**  
-A: No. Remediation mode always removes Organization sharing links after converting users.
+**Q: Can I use the Detection report as input for remediation?**  
+A: **No.** Only a plain list of site URLs is supported for remediation.
 
-**Q: Will the script process all sites?**  
-A: Yes, unless you specify an input CSV to limit the scope.
+**Q: What does Remediation do?**  
+A: Converts users with Organization links to direct permissions and removes those sharing groups and links.
 
-**Q: What does "Organization" link mean?**  
-A: Sharing links accessible by anyone in your organization (tenant-wide).
+**Q: Can I preserve sharing links after remediation?**  
+A: No. Remediation always removes Organization sharing links as part of the process.
 
 ---
 
 ## Version History
 
-- **August 7, 2025:** Major update—automatic remediation mode for CSV inputs, robust throttling handling, and improved reporting.
-- See script header for authorship and detailed changelog.
+- **Aug 7, 2025:** Updated for clarity—Detection output cannot be used as remediation input. Improved throttling handling and logging.
+- See script header for detailed changelog.
 
 ---
 
 ## Disclaimer
 
-These scripts are provided **AS IS** without warranty. Use at your own risk. Test in non-production and review all changes before running remediation.
+These scripts are provided **AS IS** without warranty. Test thoroughly and review all changes before running remediation.
 
 ---
 
 **Author:** Mike Lee  
-*Last updated: August 7, 2025*
+*Last updated: Aug 7, 2025*
