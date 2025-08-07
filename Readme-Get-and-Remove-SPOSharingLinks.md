@@ -1,539 +1,212 @@
-# SharePoint Online Sharing Links Management Script
+# SharePoint Online Sharing Links Management Scripts
 
-> **⚠️ IMPORTANT DISCLAIMER:** When removing sharing links (`$RemoveSharingLink = $true`), the changes are PERMANENT. Any documents, emails, or messages using these sharing links will no longer work after removal. Users will need to be provided with direct access links to the documents instead. Carefully consider the impact before removing sharing links in production environments.
+> **⚠️ WARNING:** Removing sharing links (`Remediation` mode) is a permanent action. Any links previously shared will stop working immediately.
 
 ## Overview
 
-The **Get-and-Remove-SPOSharingLinks-pnpxx.ps1** script is a comprehensive PowerShell tool designed to identify, inventory, and remediate SharePoint Online sharing links across your Microsoft 365 tenant. It focuses specifically on **Organization sharing links** and provides a two-step workflow for safe and efficient remediation.
+These PowerShell scripts provide a robust, auditable way to inventory and remediate sharing links across all SharePoint Online sites in your Microsoft 365 tenant. They support a two-step workflow—first reporting, then selectively converting Organization sharing links to direct permissions and optionally removing sharing links and cleaning up empty/corrupted sharing groups.
 
-### Key Features
-
-- 🔍 **Complete Inventory**: Scans all SharePoint sites to identify sharing links
-- 🎯 **Targeted Remediation**: Converts Organization sharing links to direct permissions
-- 🔄 **Flexible Link Management**: Option to preserve or remove sharing links after user conversion
-- 🧹 **Automatic Cleanup**: Removes corrupted and empty sharing groups
-- 📊 **Detailed Reporting**: Generates comprehensive CSV reports
-- 🚀 **Two-Step Workflow**: Report first, then remediate based on findings
-- 🔄 **Smart Detection**: Automatically recognizes its own output for targeted processing
+- **Get-and-Remove-SPOSharingLinks-pnp2x.ps1** – For PnP.PowerShell 2.x
+- **Get-and-Remove-SPOSharingLinks-pnp3x.ps1** – For PnP.PowerShell 3.x
 
 ---
 
-## Table of Contents
+## Features
 
-1. [Prerequisites](#prerequisites)
-2. [Installation](#installation)
-3. [Configuration](#configuration)
-4. [Usage Workflows](#usage-workflows)
-5. [Script Parameters](#script-parameters)
-6. [Output Files](#output-files)
-7. [Common Scenarios](#common-scenarios)
-8. [Troubleshooting](#troubleshooting)
-9. [Security Considerations](#security-considerations)
-10. [Support](#support)
+- **Comprehensive Inventory:** Scans all or selected SharePoint sites for sharing links, focusing on Organization links.
+- **Targeted Remediation:** Converts users with Organization links into direct document or site permissions.
+- **Safe Two-Step Workflow:** Run in Detection (report-only) mode first, then Remediation mode based on your review of the results.
+- **Automatic Group Cleanup:** Removes empty or corrupted sharing groups in remediation.
+- **Throttling-Resilient:** Built-in retry and exponential backoff logic for large environments.
+- **Flexible Input:** Process all sites, a list of URLs, or a previous report CSV for precise targeting.
+- **Detailed Output & Logging:** CSV report and log file (INFO, DEBUG, ERROR), suitable for audits.
+- **Supports Modern Authentication:** Uses certificate-based Entra ID (Azure AD) app authentication.
 
 ---
 
 ## Prerequisites
 
-### Required Software
 - **PowerShell 7+**
-- **PnP.PowerShell module - Note: Use Compatible Version of Script**
-- **Get-and-Remove-SPOSharingLinks-pnp2x.ps1 (PNP2.x)**
-- **Get-and-Remove-SPOSharingLinks-pnp3x.ps1 (PNP3.x)**
+- **PnP.PowerShell** (version 2.x or 3.x, matching your chosen script)
+- **Microsoft 365 Tenant** with SharePoint Online
+- **Entra ID Application Registration** (with certificate)
+    - Application Permissions:
+        - `SharePoint:Sites.FullControl.All`
+        - `SharePoint:User.Read.All`
+        - `Graph:Sites.FullControl.All`
+        - `Graph:Sites.Read.All`
+        - `Graph:Files.Read.All`
+    - Certificate uploaded to the app registration
 
-### Microsoft 365 Requirements
-- **SharePoint Online** subscription
-- **Global Administrator** or **SharePoint Administrator** permissions
-- **Entra ID Application** with certificate-based authentication
-
-### Permissions Required
-The Entra ID application must have the following **Application permissions**:
-- `SharePoint:Sites.FullControl.All` - Access to all SharePoint sites
-- `SharePoint:User.Read.All` - Read user profiles and group memberships
-- `Graph:Sites.FullControl.All` - Access to all SharePoint sites via Graph
-- `Graph:Files.Read.All` - Access to all SharePoint files via Graph
+- **Administrator Permissions:** You must be a SharePoint or Global Administrator.
 
 ---
 
 ## Installation
 
-### Step 1: Install PnP PowerShell Module
+1. **Install PnP PowerShell**  
+   ```powershell
+   Install-Module -Name PnP.PowerShell -Scope CurrentUser -Force
+   ```
 
-```powershell
-# Install the latest PnP PowerShell module
-Install-Module -Name PnP.PowerShell -Scope CurrentUser -Force
+2. **Download the Script**  
+   Download the script version matching your PnP.PowerShell installation.
 
-# Verify installation
-Get-Module -Name PnP.PowerShell -ListAvailable
-```
+3. **Set Up Entra ID App & Certificate**  
+   - Register a new app in Entra ID (Azure AD); upload your certificate.
+   - Grant required API permissions and admin consent.
 
-### Step 2: Download the Script
-
-1. Download `Get-and-Remove-SPOSharingLinks-pnpxx.ps1` to your local machine
-2. Save it in a dedicated folder (e.g., `C:\SharePointScripts\`)
-
-### Step 3: Create Entra ID Application
-
-1. **Navigate to Azure Portal** → **Entra ID** → **App registrations**
-2. **Click "New registration"**
-3. **Configure the application**:
-   - Name: `SharePoint Sharing Links Management`
-   - Supported account types: `Accounts in this organizational directory only`
-   - Redirect URI: Leave blank
-4. **Note the Application (client) ID** and **Directory (tenant) ID**
-
-### Step 4: Configure API Permissions
-
-1. **Go to API permissions** → **Add a permission**
-2. **Select Microsoft Graph** → **Application permissions**
-3. **Add these permissions**:
-- `SharePoint:Sites.FullControl.All`
-- `SharePoint:User.Read.All`
-- `Graph:Sites.FullControl.All`
-- `Graph:Files.Read.All`
-4. **Click "Grant admin consent"**
-
-### Step 5: Create Certificate
-
-```powershell
-# Create a self-signed certificate for authentication
-$cert = New-SelfSignedCertificate -Subject "CN=SharePointSharingLinksApp" -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable -KeySpec Signature -KeyLength 2048 -KeyAlgorithm RSA -HashAlgorithm SHA256
-
-# Note the thumbprint for script configuration
-$cert.Thumbprint
-```
-
-### Step 6: Upload Certificate to Entra ID
-
-1. **In your app registration** → **Certificates & secrets**
-2. **Click "Upload certificate"**
-3. **Export the certificate** (without private key) and upload the `.cer` file
-4. **Note the certificate thumbprint**
+4. **Export and Note Certificate Thumbprint**  
+   ```powershell
+   $cert = New-SelfSignedCertificate -Subject "CN=SPOScripts" -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable
+   $cert.Thumbprint
+   # Export public part to .cer for upload
+   Export-Certificate -Cert $cert -FilePath "C:\Temp\SPOScripts.cer"
+   ```
 
 ---
 
 ## Configuration
 
-### Edit Script Variables
-
-Open `Get-and-Remove-SPOSharingLinks-pnpxx.ps1` and update these variables:
+Open the script in your editor. Update the following variables at the top:
 
 ```powershell
-# ----------------------------------------------
-# Set Variables - EDIT THESE VALUES
-# ----------------------------------------------
-$tenantname = "yourcompany"                                     # Your tenant name (without .onmicrosoft.com)
-$appID = "your-app-id-here"                                     # Your Entra App ID
-$thumbprint = "your-certificate-thumbprint-here"               # Your certificate thumbprint
-$tenant = "your-tenant-id-here"                                # Your Tenant ID (GUID)
-$searchRegion = "NAM"                                          # Your region: NAM, EUR, or APAC
-```
-
-### Key Configuration Options
-
-| Parameter | Description | Default | Recommendations |
-|-----------|-------------|---------|-----------------|
-| `$convertOrganizationLinks` | Enable remediation mode | `$false` | Start with `$false` for reporting |
-| `$debugLogging` | Enable detailed logging | `$true` | Keep `$true` for initial runs |
-| `$inputfile` | Path to input CSV file | `$null` | Comment out for full tenant scan |
-
----
-
-## Usage Workflows
-
-### 🔄 Recommended Two-Step Workflow
-
-This is the **safest and most efficient** approach:
-
-#### **Step 1: Generate Report (Inventory Mode)**
-
-```powershell
-# 1. Edit the script configuration
-$convertOrganizationLinks = $false          # Report mode
-$debugLogging = $true                       # Enable detailed logging
-$inputfile = $null                          # Scan all sites
-
-Note: To run Inventory Mode against a list of sites, populate the $inputfile with your own site list.
-
-# 2. Run the script
-.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
-
-# 3. Review the generated CSV file in %TEMP%
-# File name format: SPO_SharingLinks_YYYY-MM-DD_HH-MM-SS.csv
-```
-
-#### **Step 2: Remediate Using Report (Automatic Mode)**
-
-```powershell
-# 1. Edit the script configuration
-$inputfile = "C:\Temp\SPO_SharingLinks_2025-07-01_14-30-15.csv"
-
-# 2. Run the script (it will auto-enable remediation for Organization links)
-.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
-
-# Note: The script automatically:
-# - Detects its own CSV format
-# - Filters for Organization sharing links only
-# - Enables remediation mode ($convertOrganizationLinks = $true)
-# - By default, removes sharing links ($RemoveSharingLink = $true)
-# - Enables cleanup mode ($cleanupCorruptedSharingGroups = $true)
-```
-
-#### **Step 3: Remediate While Preserving Sharing Links (Optional)**
-
-```powershell
-# If you want to convert users to direct permissions but KEEP the sharing links:
-$inputfile = "C:\Temp\SPO_SharingLinks_2025-07-01_14-30-15.csv"
-$RemoveSharingLink = $false  # This preserves the sharing links
-
-# Run the script
-.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
-
-# Note: With $RemoveSharingLink = $false:
-# - Users are still converted to direct permissions
-# - Sharing links remain intact and functional
-# - Corrupted sharing groups are NOT cleaned up
-# - Any existing references to these links in documents/emails will continue to work
-```
-
-> **💡 TIP:** Using `$RemoveSharingLink = $false` is recommended if you're unsure about the impact of removing sharing links. This ensures any existing references to the links continue to work while still converting users to direct permissions.
-
-### 📊 Alternative Workflows
-
-#### **Direct Remediation with Site List**
-
-```powershell
-# Create a simple CSV with site URLs
-# File: sitelist.csv
-# Content:
-# URL
-# https://yourcompany.sharepoint.com/sites/site1
-# https://yourcompany.sharepoint.com/sites/site2
-
-$inputfile = "C:\temp\sitelist.csv"
-$convertOrganizationLinks = $true
-.\Get-and-Remove-SPOSharingLinks-pnp2x.ps1
-```
-
-#### **Full Tenant Scan with Immediate Remediation**
-
-```powershell
-# ⚠️ WARNING: This processes ALL sites immediately
-$convertOrganizationLinks = $true
-$inputfile = $null
-.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
+$tenantname = "yourtenant"        # Without '.onmicrosoft.com'
+$appID = "your-app-id"            # Entra App ID
+$thumbprint = "your-cert-thumb"   # Certificate thumbprint
+$tenant = "your-tenant-id"        # Directory (tenant) ID (GUID)
+$searchRegion = "NAM"             # "NAM", "EUR", etc.
+$Mode = "Detection"               # "Detection" (report) or "Remediation" (convert/remove)
+$debugLogging = $false            # $true for verbose logs, $false for info/errors only
+$inputfile = ""                   # Optional path to CSV of site URLs or previous report
 ```
 
 ---
 
-## Script Parameters
+## Script Parameters & Modes
 
-### Core Parameters
+| Parameter                    | Type     | Default     | Description                                                                      |
+|------------------------------|----------|-------------|----------------------------------------------------------------------------------|
+| `$tenantname`                | String   | (required)  | Your M365 tenant (no `.onmicrosoft.com`)                                         |
+| `$appID`                     | String   | (required)  | Entra ID application ID                                                          |
+| `$thumbprint`                | String   | (required)  | Certificate thumbprint for authentication                                        |
+| `$tenant`                    | String   | (required)  | Directory (tenant) ID                                                            |
+| `$searchRegion`              | String   | "NAM"       | Microsoft Graph search region                                                    |
+| `$Mode`                      | String   | "Detection" | "Detection" = report only, "Remediation" = convert/remove org links              |
+| `$debugLogging`              | Boolean  | $false      | $true for debug-level logs                                                       |
+| `$inputfile`                 | String   | ""          | Optional path to CSV of site URLs or script CSV output for targeted remediation   |
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `$tenantname` | String | ✅ Yes | Your M365 tenant name (without .onmicrosoft.com) |
-| `$appID` | String | ✅ Yes | Entra ID Application ID |
-| `$thumbprint` | String | ✅ Yes | Certificate thumbprint for authentication |
-| `$tenant` | String | ✅ Yes | Tenant ID (GUID) |
-
-### Operational Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `$convertOrganizationLinks` | Boolean | `$false` | Enable remediation mode |
-| `$RemoveSharingLink` | Boolean | `$true` | When `$true`, removes sharing links after converting users. When `$false`, preserves sharing links while still converting users to direct permissions. **⚠️ WARNING:** Removing sharing links (`$true`) will permanently break any existing references to these links in documents, emails, or messages. |
-| `$cleanupCorruptedSharingGroups` | Boolean | `$false`* | Clean up empty sharing groups |
-| `$debugLogging` | Boolean | `$true` | Enable detailed logging |
-| `$inputfile` | String | `$null` | Path to input CSV file |
-| `$searchRegion` | String | `"NAM"` | Microsoft Graph search region |
-
-*Automatically set to `$true` when `$convertOrganizationLinks` is `$true` AND `$RemoveSharingLink` is `$true`
-
-### Region Codes
-
-| Region | Code | Description |
-|--------|------|-------------|
-| North America | `NAM` | United States, Canada |
-| Europe | `EUR` | European Union countries |
-| Asia Pacific | `APAC` | Asia and Pacific regions |
+**Automatic Behavior:**
+- If you provide a previous report CSV as `$inputfile`, the script will:
+    - Filter for sites with Organization sharing links only
+    - Automatically switch to Remediation mode
 
 ---
 
-## Output Files
+## Usage
 
-### CSV Report File
+### Step 1: Inventory (Detection Mode)
 
-**Location**: `%TEMP%\SPO_SharingLinks_YYYY-MM-DD_HH-MM-SS.csv`
+```powershell
+# Set as follows:
+$Mode = "Detection"
+$inputfile = ""   # or provide a list of site URLs (CSV, one per line or with "URL" header)
+.\Get-and-Remove-SPOSharingLinks-pnp3x.ps1    # or -pnp2x.ps1
+```
+- Generates a detailed CSV in your `%TEMP%` folder listing all discovered sharing links.
 
-**Columns**:
-- `Site URL` - SharePoint site URL
-- `Site Owner` - Site collection owner
-- `IB Mode` - Information Barrier mode
-- `IB Segment` - Information Barrier segments
-- `Site Template` - SharePoint template type
-- `Sharing Group Name` - Name of the sharing group
-- `Sharing Link Members` - Users with access (Name <Email>)
-- `File URL` - Direct link to shared document
-- `File Owner` - Document owner
-- `Sharing Link URL` - Current Sharing Link (to be removed)
-- `IsTeamsConnected` - Whether site is Teams-connected
-- `SharingCapability` - Site sharing settings
-- `Last Content Modified` - When content was last modified
-- `Link Removed` - Whether sharing link was removed (True/False)
+### Step 2: Review Report
 
-### Log File
+- Open the CSV report.
+    - "Sharing Group Name" containing "Organization" are candidates for remediation.
+    - Review links, users, and impacted files.
 
-**Location**: `%TEMP%\SPOSharingLinksYYYY-MM-DD_HH-MM-SS_logfile.log`
+### Step 3: Remediate (Convert/Remove Organization Links)
 
-**Log Levels**:
-- `[INFO]` - General operational information
-- `[DEBUG]` - Detailed technical information (when enabled)
-- `[ERROR]` - Errors and warnings
+```powershell
+# Use the previous report for targeted remediation:
+$Mode = "Detection"           # The script will auto-enable Remediation mode for its own CSV format
+$inputfile = "C:\Temp\SPO_SharingLinks_YYYY-MM-DD_HH-MM-SS.csv"
+.\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
+```
+- Only Organization links are targeted. The script converts users to direct permissions and removes the corresponding sharing groups and links.
+
+### Step 4: Optional – Full Tenant Remediation
+
+```powershell
+$Mode = "Remediation"
+$inputfile = ""   # Leave empty to process all sites
+.\Get-and-Remove-SPOSharingLinks-pnp3x.ps1
+```
+- **CAUTION:** This will process ALL sites in the tenant and remove all Organization sharing links.
 
 ---
 
-## Common Scenarios
+## Output
 
-### 🎯 Scenario 1: Monthly Sharing Links Audit
+- **CSV Report:**  
+  `%TEMP%\SPO_SharingLinks_YYYY-MM-DD_HH-MM-SS.csv`  
+  Columns: Site URL, Site Owner, Sharing Group Name, Members, File/Item URL, Owner, Link URL, Link Expiration, and more.
 
-```powershell
-# Run monthly report to track sharing links
-$convertOrganizationLinks = $false
-$debugLogging = $false                    # Reduce log verbosity for regular runs
-.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
-```
+- **Log File:**  
+  `%TEMP%\SPOSharingLinksYYYY-MM-DD_HH-MM-SS_logfile.log`  
+  Levels: INFO, DEBUG (if enabled), ERROR
 
-### 🔧 Scenario 2: Remediate Specific Sites
+---
 
-```powershell
-# Create CSV with problematic sites
-# Then run remediation
-$inputfile = "C:\temp\problematic_sites.csv"
-$convertOrganizationLinks = $true
-$RemoveSharingLink = $true  # Default: removes sharing links after user conversion
-.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
-```
+## Best Practices
 
-> **⚠️ CAUTION:** When using `$RemoveSharingLink = $true`, be prepared to update any documents, emails, or messages that contain these sharing links, as they will stop working after the script runs.
-
-### � Scenario 3: Convert Users but Preserve Sharing Links
-
-```powershell
-# Convert Organization sharing link users to direct permissions
-# But KEEP the sharing links intact
-$convertOrganizationLinks = $true
-$RemoveSharingLink = $false  # Preserves sharing links
-$inputfile = "C:\temp\sites_to_process.csv"
-.\Get-and-Remove-SPOSharingLinks-pnpxx.ps1
-```
-
-> **💡 RECOMMENDED APPROACH:** This scenario provides a safe middle ground - users get direct permissions while existing sharing links continue to function, minimizing disruption.
-
-### �📊 Scenario 4: Executive Dashboard Data
-
-```powershell
-# Generate data for executive reporting
-$convertOrganizationLinks = $false
-$debugLogging = $false
-# Process the CSV with Power BI or Excel for visualization
-```
-
-### 🧹 Scenario 4: Cleanup After Migration
-
-```powershell
-# After migrating from external sharing to direct permissions
-# Use the script's CSV output to verify Organization links are converted
-$inputfile = "previous_scan_results.csv"
-# Script auto-detects and processes Organization links only
-```
+- **Always start in Detection mode.** Review the report before any remediation.
+- **Use input files** to target specific sites or Organization links.
+- **Test in a non-production tenant** before broad use.
+- **Keep log files** for audit and troubleshooting.
+- **Preserve sharing links** if unsure: Only set `$Mode = "Remediation"` once you are confident.
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-#### ❌ Authentication Errors
-
-**Error**: `AADSTS70011: The provided value for the input parameter 'scope' is not valid`
-
-**Solution**:
-1. Verify the app has correct permissions
-2. Ensure admin consent is granted
-3. Check certificate is properly uploaded
-
-#### ❌ Certificate Issues
-
-**Error**: `Certificate with thumbprint 'xxx' not found`
-
-**Solutions**:
-```powershell
-# List available certificates
-Get-ChildItem -Path "Cert:\CurrentUser\My"
-
-# Check if certificate is in correct store
-Get-ChildItem -Path "Cert:\LocalMachine\My"
-```
-
-#### ❌ Throttling Errors
-
-**Error**: `Too many requests` or `Request limit exceeded`
-
-**Solution**: The script automatically handles throttling with exponential backoff. For severe throttling:
-1. Reduce batch sizes by using input files with fewer sites
-2. Run during off-peak hours
-3. Increase delays in the throttling function
-
-#### ❌ Permission Errors
-
-**Error**: `Access denied` when processing sites
-
-**Solutions**:
-1. Verify app has `Sites.FullControl.All` permission
-2. Check that admin consent is properly granted
-3. Ensure the app is not blocked by conditional access policies
-
-### Performance Optimization
-
-#### For Large Tenants (1000+ sites)
-
-1. **Use input files** to process sites in batches
-2. **Run during off-peak hours** to minimize throttling
-3. **Disable debug logging** for production runs
-4. **Monitor throttling** and adjust timing if needed
-
-#### Memory Management
-
-```powershell
-# For very large tenants, restart PowerShell session periodically
-# The script processes sites one at a time to minimize memory usage
-```
+- **Authentication errors:** Ensure your app registration, certificate, and permissions are correct.
+- **Throttling:** The script automatically retries, but for large tenants, consider splitting input files.
+- **Permission issues:** Confirm app permissions and admin consent.
+- **Debug logs:** Set `$debugLogging = $true` for troubleshooting.
 
 ---
 
-## Security Considerations
+## Security & Compliance
 
-### 🔒 Certificate Security
-
-- **Store certificates securely** in the Windows Certificate Store
-- **Use strong passwords** for certificate export if needed
-- **Rotate certificates regularly** (annually recommended)
-- **Limit certificate access** to authorized administrators only
-
-### 🛡️ Application Security
-
-- **Review app permissions regularly**
-- **Monitor app usage** through Entra ID audit logs
-- **Use descriptive app names** for easy identification
-- **Document app ownership** and purpose
-
-### 📋 Data Protection
-
-- **Secure log files** - they contain user and site information
-- **Clean up temporary files** after script execution
-- **Follow data retention policies** for generated reports
-- **Encrypt sensitive data** if storing long-term
-
-### 🔍 Audit Recommendations
-
-1. **Log all script executions** with dates and operators
-2. **Review remediation results** before final approval
-3. **Test in non-production environment** first
-4. **Maintain change documentation** for compliance
+- Store certificates securely.
+- Limit access to the app registration and script.
+- Clean up temporary files after processing.
+- Document changes and script runs for compliance.
 
 ---
 
-## Script Workflow Diagram
+## FAQ
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Start Script  │ -> │  Load Variables │ -> │   Authenticate  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                                       │
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Get Site List │ <- │  Check Input    │ <- │  Connect to     │
-│   (All Sites)   │    │  File Type      │    │  Admin Center   │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │
-         │              ┌─────────────────┐
-         │              │   Load CSV      │
-         │              │   Filter Org    │
-         │              │   Links Only    │
-         │              └─────────────────┘
-         │                       │
-         ↓                       ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                    Process Each Site                            │
-│  1. Connect to site                                             │
-│  2. Get SharePoint groups                                       │
-│  3. Get group members                                           │
-│  4. If remediation mode:                                        │
-│     - Remove users from sharing groups                         │
-│     - Grant direct permissions                                  │
-│     - If $RemoveSharingLink = $true:                            │
-│       * Remove sharing links                                   │
-│       * Clean up empty sharing groups                          │
-│  5. Write data to CSV                                           │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                       ┌─────────────────┐
-                       │  Generate Final │
-                       │     Report      │
-                       │   (CSV + Log)   │
-                       └─────────────────┘
-```
+**Q: Can I convert users but keep sharing links active?**  
+A: No. Remediation mode always removes Organization sharing links after converting users.
+
+**Q: Will the script process all sites?**  
+A: Yes, unless you specify an input CSV to limit the scope.
+
+**Q: What does "Organization" link mean?**  
+A: Sharing links accessible by anyone in your organization (tenant-wide).
 
 ---
 
 ## Version History
 
-| Version | Date | Changes |
-|---------|------|---------|
-| 2.1 | July 2, 2025 | Added `$RemoveSharingLink` parameter to allow preserving sharing links while converting users |
-| 2.0 | July 1, 2025 | Complete rewrite with two-step workflow |
-| 1.5 | June 2025 | Added automatic cleanup integration |
-| 1.0 | May 2025 | Initial release |
-
----
-
-## Support
-
-### Getting Help
-
-1. **Check the log files** for detailed error information
-2. **Review this README** for common scenarios
-3. **Test in a small environment** before large-scale deployment
-4. **Document your specific use case** when seeking support
-
-### Best Practices
-
-- ✅ **Always test in non-production first**
-- ✅ **Start with report mode** before remediation
-- ✅ **Review CSV output** before running remediation
-- ✅ **Consider whether to preserve sharing links** by setting `$RemoveSharingLink = $false`
-  - ⚠️ **IMPORTANT:** Removing sharing links permanently breaks any links shared in documents or emails
-  - 💡 **RECOMMENDATION:** Start with `$RemoveSharingLink = $false` to minimize disruption
-- ✅ **Backup important data** before making changes
-- ✅ **Run during maintenance windows** for large operations
-- ✅ **Monitor performance** and adjust timing as needed
-
-### Script Maintenance
-
-- 📅 **Review quarterly** for SharePoint API changes
-- 🔄 **Update PnP PowerShell** module regularly
-- 📊 **Monitor execution metrics** for performance trends
-- 🔒 **Rotate certificates** annually
-- 📝 **Update documentation** with lessons learned
+- **August 7, 2025:** Major update—automatic remediation mode for CSV inputs, robust throttling handling, and improved reporting.
+- See script header for authorship and detailed changelog.
 
 ---
 
 ## Disclaimer
 
-This sample script is provided **AS IS** without warranty of any kind. Microsoft and the script authors disclaim all implied warranties including, without limitation, any implied warranties of merchantability or fitness for a particular purpose. The entire risk arising out of the use or performance of the sample scripts and documentation remains with you.
+These scripts are provided **AS IS** without warranty. Use at your own risk. Test in non-production and review all changes before running remediation.
 
 ---
 
-*Last Updated: July 2, 2025*  
-*Script Version: 2.1*  
-*Author: Mike Lee*
+**Author:** Mike Lee  
+*Last updated: August 7, 2025*
