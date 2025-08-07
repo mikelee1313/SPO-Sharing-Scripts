@@ -1,9 +1,3 @@
-- **Detection mode output (CSV) cannot be used as input for remediation.**  
-- Two modes: Detection (inventory/report) and Remediation (direct action).  
-- Input for remediation must be a simple list of site URLs, NOT a detection report.
-
----
-
 # SharePoint Online Sharing Links Management Scripts
 
 > **⚠️ WARNING:** Removing sharing links in Remediation mode is permanent. Any previously distributed links will stop working immediately.
