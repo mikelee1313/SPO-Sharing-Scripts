@@ -639,12 +639,6 @@ Function Write-SiteSharingLinks {
 # ----------------------------------------------
 # Function to convert Organization sharing links to direct permissions
 # ----------------------------------------------
-# ----------------------------------------------
-# Function to convert Organization sharing links to direct permissions
-# ----------------------------------------------
-# ----------------------------------------------
-# Function to convert Organization sharing links to direct permissions
-# ----------------------------------------------
 Function Convert-OrganizationSharingLinks {
     param(
         [Parameter(Mandatory = $true)]
