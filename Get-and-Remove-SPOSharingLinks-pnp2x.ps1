@@ -55,7 +55,7 @@
 
 .NOTES
     Authors: Mike Lee
-    Updated: 8/7/2025
+    Updated: 8/28/2025
 
     - Requires PnP.PowerShell 2.x module
     - Requires an Entra app registration with appropriate SharePoint permissions
@@ -113,10 +113,10 @@
 # ----------------------------------------------
 # Set Variables
 # ----------------------------------------------
-$tenantname = "m365x61250205"                                   # This is your tenant name
-$appID = "5baa1427-1e90-4501-831d-a8e67465f0d9"                 # This is your Entra App ID
+$tenantname = "m365cpi13246019"                                   # This is your tenant name
+$appID = "abc64618-283f-47ba-a185-50d935d51d57"                 # This is your Entra App ID
 $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certificate thumbprint
-$tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"                # This is your Tenant ID
+$tenant = "9cfc42cb-51da-4055-87e9-b20a170b6ba3"                # This is your Tenant ID
 $searchRegion = "NAM"                                           # Region for Microsoft Graph search
 $Mode = "Detection"                                             # Set to "Detection" for report mode, "Remediation" to convert Organization sharing links to direct permissions
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
@@ -492,6 +492,17 @@ Function Update-SiteCollectionData {
             Email             = $SPUserEmail
         }
         $siteCollectionData[$SiteUrl]["SP Users"].Add($userObject)
+        
+        # Debug: Log when we store sharing group members
+        if ($AssociatedSPGroup -like "SharingLinks*") {
+            Write-DebugLog -LogName $Log -LogEntryText "STORED user in site data: Group='$AssociatedSPGroup', Name='$SPUserName', Title='$SPUserTitle', Email='$SPUserEmail'"
+        }
+    }
+    else {
+        # Debug: Log when we skip storing a user
+        if ($AssociatedSPGroup -like "SharingLinks*") {
+            Write-DebugLog -LogName $Log -LogEntryText "SKIPPED storing user: SPUserName empty: $([string]::IsNullOrWhiteSpace($SPUserName)), AssociatedSPGroup empty: $([string]::IsNullOrWhiteSpace($AssociatedSPGroup)), Values: Name='$SPUserName', Group='$AssociatedSPGroup'"
+        }
     }
 }
 
@@ -535,103 +546,128 @@ Function Write-SiteSharingLinks {
             # Get users in this sharing links group
             $groupMembers = $SiteData."SP Users" | Where-Object { $_.AssociatedSPGroup -eq $sharingGroup }
             
+            # Debug: Log what members we found for this sharing group
+            Write-DebugLog -LogName $Log -LogEntryText "Processing sharing group '$sharingGroup' - found $($groupMembers.Count) members in site data"
+            
+            # Debug: Also show ALL users for this site to verify data storage
+            $allSiteUsers = $SiteData."SP Users"
+            $allSharingUsers = $allSiteUsers | Where-Object { $_.AssociatedSPGroup -like "SharingLinks*" }
+            Write-DebugLog -LogName $Log -LogEntryText "Site has $($allSiteUsers.Count) total users, $($allSharingUsers.Count) in sharing groups"
+            
             if ($groupMembers.Count -gt 0) {
-                # Format members as "Name <Email>"
-                $membersFormatted = ($groupMembers | ForEach-Object {
-                        $emailStr = if ($_.Email) { $_.Email | Out-String -NoNewline } else { "" }
-                        "$($_.Name) <$emailStr>"
-                    }) -join ';'
-                
-                # Get document details if available
-                $documentUrl = "Not found"
-                $documentOwner = "Not found"
-                $documentItemType = "Not found"
-                $sharingLinkUrl = "Not found"
-                $linkExpirationDate = "Not found"
-                if ($SiteData.ContainsKey("DocumentDetails") -and $SiteData["DocumentDetails"].ContainsKey($sharingGroup)) {
-                    $documentUrl = $SiteData["DocumentDetails"][$sharingGroup]["DocumentUrl"]
-                    $documentOwner = $SiteData["DocumentDetails"][$sharingGroup]["DocumentOwner"]
-                    $documentItemType = $SiteData["DocumentDetails"][$sharingGroup]["DocumentItemType"]
-                    $sharingLinkUrl = $SiteData["DocumentDetails"][$sharingGroup]["SharingLinkUrl"]
-                    $linkExpirationDate = $SiteData["DocumentDetails"][$sharingGroup]["ExpirationDate"]
-                    Write-DebugLog -LogName $Log -LogEntryText "Retrieved document details for $sharingGroup - URL: $documentUrl, Owner: $documentOwner, Type: $documentItemType, LinkURL: $sharingLinkUrl, Expiration: $linkExpirationDate"
+                foreach ($member in $groupMembers) {
+                    Write-DebugLog -LogName $Log -LogEntryText "  Found member: Name='$($member.Name)', Title='$($member.Title)', Email='$($member.Email)'"
                 }
-                else {
-                    Write-DebugLog -LogName $Log -LogEntryText "No document details found for sharing group: $sharingGroup. DocumentDetails exists: $($SiteData.ContainsKey('DocumentDetails')), Group key exists: $(if ($SiteData.ContainsKey('DocumentDetails')) { $SiteData['DocumentDetails'].ContainsKey($sharingGroup) } else { 'N/A' })"
-                }
-                
-                # Get link removal status
-                $linkRemoved = "False"
-                if ($SiteData.ContainsKey("Link Removal Status") -and $SiteData["Link Removal Status"].ContainsKey($sharingGroup)) {
-                    $linkRemoved = if ($SiteData["Link Removal Status"][$sharingGroup]) { "True" } else { "False" }
-                }
-                
-                # Extract filename from the document URL
-                $filename = "Not found"
-                if ($documentUrl -ne "Not found" -and -not [string]::IsNullOrWhiteSpace($documentUrl)) {
-                    try {
-                        if ($documentUrl -match "DispForm\.aspx\?ID=(\d+)") {
-                            # This is a list item - try to get a meaningful name
-                            # For list items, we'll use "List Item" + ID as the filename
-                            $itemId = $matches[1]
-                            $filename = "List Item $itemId"
-                            
-                            # Try to extract list name for better context
-                            if ($documentUrl -match "/Lists/([^/]+)/DispForm\.aspx") {
-                                $listName = $matches[1]
-                                $filename = "$listName - Item $itemId"
-                            }
-                        }
-                        else {
-                            # This is a regular file - extract filename from URL
-                            $uri = [System.Uri]$documentUrl
-                            $pathParts = $uri.AbsolutePath.Split('/')
-                            $filename = $pathParts[$pathParts.Length - 1]
-                            
-                            # Decode URL encoding if present
-                            $filename = [System.Web.HttpUtility]::UrlDecode($filename)
-                        }
-                    }
-                    catch {
-                        Write-DebugLog -LogName $Log -LogEntryText "Could not extract filename from URL: $documentUrl. Error: $_"
-                        $filename = "Extraction Error"
-                    }
-                }
-                
-                # Determine sharing type based on sharing group name
-                $sharingType = "Unknown"
-                if ($sharingGroup -like "*Flexible*") {
-                    $sharingType = "Flexible"
-                }
-                elseif ($sharingGroup -like "*Organization*") {
-                    $sharingType = "Organization"
-                }
-                
-                # Create CSV line
-                $csvLine = [PSCustomObject]@{
-                    "Site URL"              = $SiteData.URL
-                    "Site Owner"            = $SiteData.Owner
-                    "IB Mode"               = $SiteData."IB Mode"
-                    "IB Segment"            = $SiteData."IB Segment"
-                    "Site Template"         = $SiteData.Template
-                    "Sharing Group Name"    = $sharingGroup
-                    "Sharing Link Members"  = $membersFormatted
-                    "File URL"              = $documentUrl
-                    "File Owner"            = $documentOwner
-                    "Filename"              = $filename
-                    "SharingType"           = $sharingType
-                    "Sharing Link URL"      = $sharingLinkUrl
-                    "Link Expiration Date"  = $linkExpirationDate
-                    "IsTeamsConnected"      = $SiteData.IsTeamsConnected
-                    "SharingCapability"     = $SiteData.SharingCapability
-                    "Last Content Modified" = $SiteData.LastContentModifiedDate
-                    "Link Removed"          = $linkRemoved
-                }
-                
-                # Write directly to the CSV file
-                $csvLine | Export-Csv -Path $sharingLinksOutputFile -Append -NoTypeInformation -Force
-                Write-DebugLog -LogName $Log -LogEntryText "  Wrote sharing link data for group: $sharingGroup"
             }
+            else {
+                # Debug: If no members found for this specific group, check if there are any users with similar group names
+                $similarGroups = $allSiteUsers | Where-Object { $_.AssociatedSPGroup -like "*$($sharingGroup.Split('.')[1])*" }
+                Write-DebugLog -LogName $Log -LogEntryText "  No members found for exact group name '$sharingGroup'. Found $($similarGroups.Count) users with similar group patterns."
+                foreach ($similarUser in $similarGroups) {
+                    Write-DebugLog -LogName $Log -LogEntryText "    Similar: Group='$($similarUser.AssociatedSPGroup)', Name='$($similarUser.Name)'"
+                }
+            }
+            
+            # Format members as "Name <Email>" - handle empty groups with "No members"
+            $membersFormatted = if ($groupMembers.Count -gt 0) {
+                ($groupMembers | ForEach-Object {
+                    $emailStr = if ($_.Email) { $_.Email | Out-String -NoNewline } else { "" }
+                    "$($_.Name) <$emailStr>"
+                }) -join ';'
+            }
+            else {
+                "No members"
+            }
+            
+            # Get document details if available
+            $documentUrl = "Not found"
+            $documentOwner = "Not found"
+            $documentItemType = "Not found"
+            $sharingLinkUrl = "Not found"
+            $linkExpirationDate = "Not found"
+            if ($SiteData.ContainsKey("DocumentDetails") -and $SiteData["DocumentDetails"].ContainsKey($sharingGroup)) {
+                $documentUrl = $SiteData["DocumentDetails"][$sharingGroup]["DocumentUrl"]
+                $documentOwner = $SiteData["DocumentDetails"][$sharingGroup]["DocumentOwner"]
+                $documentItemType = $SiteData["DocumentDetails"][$sharingGroup]["DocumentItemType"]
+                $sharingLinkUrl = $SiteData["DocumentDetails"][$sharingGroup]["SharingLinkUrl"]
+                $linkExpirationDate = $SiteData["DocumentDetails"][$sharingGroup]["ExpirationDate"]
+                Write-DebugLog -LogName $Log -LogEntryText "Retrieved document details for $sharingGroup - URL: $documentUrl, Owner: $documentOwner, Type: $documentItemType, LinkURL: $sharingLinkUrl, Expiration: $linkExpirationDate"
+            }
+            else {
+                Write-DebugLog -LogName $Log -LogEntryText "No document details found for sharing group: $sharingGroup. DocumentDetails exists: $($SiteData.ContainsKey('DocumentDetails')), Group key exists: $(if ($SiteData.ContainsKey('DocumentDetails')) { $SiteData['DocumentDetails'].ContainsKey($sharingGroup) } else { 'N/A' })"
+            }
+            
+            # Get link removal status
+            $linkRemoved = "False"
+            if ($SiteData.ContainsKey("Link Removal Status") -and $SiteData["Link Removal Status"].ContainsKey($sharingGroup)) {
+                $linkRemoved = if ($SiteData["Link Removal Status"][$sharingGroup]) { "True" } else { "False" }
+            }
+            
+            # Extract filename from the document URL
+            $filename = "Not found"
+            if ($documentUrl -ne "Not found" -and -not [string]::IsNullOrWhiteSpace($documentUrl)) {
+                try {
+                    if ($documentUrl -match "DispForm\.aspx\?ID=(\d+)") {
+                        # This is a list item - try to get a meaningful name
+                        # For list items, we'll use "List Item" + ID as the filename
+                        $itemId = $matches[1]
+                        $filename = "List Item $itemId"
+                        
+                        # Try to extract list name for better context
+                        if ($documentUrl -match "/Lists/([^/]+)/DispForm\.aspx") {
+                            $listName = $matches[1]
+                            $filename = "$listName - Item $itemId"
+                        }
+                    }
+                    else {
+                        # This is a regular file - extract filename from URL
+                        $uri = [System.Uri]$documentUrl
+                        $pathParts = $uri.AbsolutePath.Split('/')
+                        $filename = $pathParts[$pathParts.Length - 1]
+                        
+                        # Decode URL encoding if present
+                        $filename = [System.Web.HttpUtility]::UrlDecode($filename)
+                    }
+                }
+                catch {
+                    Write-DebugLog -LogName $Log -LogEntryText "Could not extract filename from URL: $documentUrl. Error: $_"
+                    $filename = "Extraction Error"
+                }
+            }
+            
+            # Determine sharing type based on sharing group name
+            $sharingType = "Unknown"
+            if ($sharingGroup -like "*Flexible*") {
+                $sharingType = "Flexible"
+            }
+            elseif ($sharingGroup -like "*Organization*") {
+                $sharingType = "Organization"
+            }
+            
+            # Create CSV line
+            $csvLine = [PSCustomObject]@{
+                "Site URL"              = $SiteData.URL
+                "Site Owner"            = $SiteData.Owner
+                "IB Mode"               = $SiteData."IB Mode"
+                "IB Segment"            = $SiteData."IB Segment"
+                "Site Template"         = $SiteData.Template
+                "Sharing Group Name"    = $sharingGroup
+                "Sharing Link Members"  = $membersFormatted
+                "File URL"              = $documentUrl
+                "File Owner"            = $documentOwner
+                "Filename"              = $filename
+                "SharingType"           = $sharingType
+                "Sharing Link URL"      = $sharingLinkUrl
+                "Link Expiration Date"  = $linkExpirationDate
+                "IsTeamsConnected"      = $SiteData.IsTeamsConnected
+                "SharingCapability"     = $SiteData.SharingCapability
+                "Last Content Modified" = $SiteData.LastContentModifiedDate
+                "Link Removed"          = $linkRemoved
+            }
+            
+            # Write directly to the CSV file
+            $csvLine | Export-Csv -Path $sharingLinksOutputFile -Append -NoTypeInformation -Force
+            Write-DebugLog -LogName $Log -LogEntryText "  Wrote sharing link data for group: $sharingGroup"
         }
     }
 }
@@ -1851,6 +1887,76 @@ Function Get-SharingLinkUrls {
                                     "Not found" 
                                 }
                                 
+                                # Check for members in the sharing link itself (GrantedToIdentitiesV2, GrantedToV2)
+                                # This is where SharePoint sometimes stores the actual users with access
+                                $sharingLinkMembers = @()
+                                
+                                # Try GrantedToIdentitiesV2 first (newer format)
+                                if ($matchingLink.GrantedToIdentitiesV2 -and $matchingLink.GrantedToIdentitiesV2.Count -gt 0) {
+                                    Write-DebugLog -LogName $Log -LogEntryText "Found $($matchingLink.GrantedToIdentitiesV2.Count) members in GrantedToIdentitiesV2 for sharing link"
+                                    foreach ($identity in $matchingLink.GrantedToIdentitiesV2) {
+                                        if ($identity.User) {
+                                            $memberEmail = if ($identity.User.Email) { $identity.User.Email } else { "" }
+                                            $memberDisplayName = if ($identity.User.DisplayName) { $identity.User.DisplayName } else { $memberEmail }
+                                            $memberLoginName = if ($identity.User.Id) { $identity.User.Id } else { $memberEmail }
+                                            
+                                            Write-DebugLog -LogName $Log -LogEntryText "  GrantedToIdentitiesV2 member: DisplayName='$memberDisplayName', Email='$memberEmail', Id='$memberLoginName'"
+                                            
+                                            # Add this member to the site collection data if not already present
+                                            $existingMember = $siteCollectionData[$SiteUrl]["SP Users"] | Where-Object { 
+                                                $_.AssociatedSPGroup -eq $groupName -and 
+                                                ($_.Name -eq $memberLoginName -or $_.Email -eq $memberEmail)
+                                            }
+                                            
+                                            if (-not $existingMember) {
+                                                Write-DebugLog -LogName $Log -LogEntryText "  Adding sharing link member to site data: Group='$groupName', LoginName='$memberLoginName', DisplayName='$memberDisplayName', Email='$memberEmail'"
+                                                
+                                                $userObject = [PSCustomObject]@{
+                                                    AssociatedSPGroup = $groupName
+                                                    Name              = $memberLoginName
+                                                    Title             = $memberDisplayName
+                                                    Email             = $memberEmail
+                                                }
+                                                $siteCollectionData[$SiteUrl]["SP Users"].Add($userObject)
+                                            }
+                                        }
+                                    }
+                                }
+                                # Fallback to GrantedToV2 (older format)
+                                elseif ($matchingLink.GrantedToV2 -and $matchingLink.GrantedToV2.Count -gt 0) {
+                                    Write-DebugLog -LogName $Log -LogEntryText "Found $($matchingLink.GrantedToV2.Count) members in GrantedToV2 for sharing link"
+                                    foreach ($grantee in $matchingLink.GrantedToV2) {
+                                        if ($grantee.User) {
+                                            $memberEmail = if ($grantee.User.Email) { $grantee.User.Email } else { "" }
+                                            $memberDisplayName = if ($grantee.User.DisplayName) { $grantee.User.DisplayName } else { $memberEmail }
+                                            $memberLoginName = if ($grantee.User.Id) { $grantee.User.Id } else { $memberEmail }
+                                            
+                                            Write-DebugLog -LogName $Log -LogEntryText "  GrantedToV2 member: DisplayName='$memberDisplayName', Email='$memberEmail', Id='$memberLoginName'"
+                                            
+                                            # Add this member to the site collection data if not already present
+                                            $existingMember = $siteCollectionData[$SiteUrl]["SP Users"] | Where-Object { 
+                                                $_.AssociatedSPGroup -eq $groupName -and 
+                                                ($_.Name -eq $memberLoginName -or $_.Email -eq $memberEmail)
+                                            }
+                                            
+                                            if (-not $existingMember) {
+                                                Write-DebugLog -LogName $Log -LogEntryText "  Adding sharing link member to site data: Group='$groupName', LoginName='$memberLoginName', DisplayName='$memberDisplayName', Email='$memberEmail'"
+                                                
+                                                $userObject = [PSCustomObject]@{
+                                                    AssociatedSPGroup = $groupName
+                                                    Name              = $memberLoginName
+                                                    Title             = $memberDisplayName
+                                                    Email             = $memberEmail
+                                                }
+                                                $siteCollectionData[$SiteUrl]["SP Users"].Add($userObject)
+                                            }
+                                        }
+                                    }
+                                }
+                                else {
+                                    Write-DebugLog -LogName $Log -LogEntryText "No members found in GrantedToIdentitiesV2 or GrantedToV2 for sharing link - this may be an anonymous/anyone link"
+                                }
+                                
                                 # Get the expiration date of the sharing link
                                 if ($matchingLink.link -and $matchingLink.link.ExpirationDateTime) {
                                     # Format the expiration date to a readable format
@@ -1983,14 +2089,93 @@ foreach ($site in $sites) {
                 # Update site data with group information
                 Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteProperties -SPGroupName $spGroupName
                 
-                # Get users in each group
+                # Get users in each group with enhanced external user support
                 $spUsers = Invoke-WithThrottleHandling -ScriptBlock {
-                    Get-PnPGroupMember -Identity $spGroup.Id
+                    # Try the standard approach first
+                    $standardUsers = Get-PnPGroupMember -Identity $spGroup.Id -ErrorAction SilentlyContinue
+                    
+                    # For sharing groups, also try alternative approaches to catch external users
+                    if ($spGroupName -like "SharingLinks*") {
+                        try {
+                            # Try using CSOM to get all users including external ones
+                            $ctx = Get-PnPContext
+                            $group = $ctx.Web.SiteGroups.GetById($spGroup.Id)
+                            $users = $group.Users
+                            $ctx.Load($users)
+                            $ctx.ExecuteQuery()
+                            
+                            # Convert CSOM users to PnP format for consistency
+                            $csomUsers = @()
+                            foreach ($user in $users) {
+                                $csomUsers += [PSCustomObject]@{
+                                    Id            = $user.Id
+                                    LoginName     = $user.LoginName
+                                    Title         = $user.Title
+                                    Email         = $user.Email
+                                    PrincipalType = $user.PrincipalType
+                                }
+                            }
+                            
+                            # Combine standard and CSOM results, removing duplicates by LoginName
+                            $allUsers = @($standardUsers) + @($csomUsers) | Group-Object LoginName | ForEach-Object { $_.Group[0] }
+                            
+                            Write-DebugLog -LogName $Log -LogEntryText "Group '$spGroupName': Standard method found $($standardUsers.Count) users, CSOM found $($csomUsers.Count) users, combined unique: $($allUsers.Count) users"
+                            
+                            return $allUsers
+                        }
+                        catch {
+                            Write-DebugLog -LogName $Log -LogEntryText "CSOM fallback failed for group '$spGroupName': $_. Using standard results only."
+                            return $standardUsers
+                        }
+                    }
+                    else {
+                        return $standardUsers
+                    }
                 } -Operation "Get members for group $spGroupName"
                 
+                # Debug: Log the number of users found and their basic info
+                if ($spGroupName -like "SharingLinks*") {
+                    Write-DebugLog -LogName $Log -LogEntryText "Sharing group '$spGroupName' has $($spUsers.Count) members"
+                    
+                    if ($spUsers.Count -gt 0) {
+                        foreach ($debugUser in $spUsers) {
+                            Write-DebugLog -LogName $Log -LogEntryText "  Member found - LoginName: '$($debugUser.LoginName)', Title: '$($debugUser.Title)', Email: '$($debugUser.Email)', PrincipalType: '$($debugUser.PrincipalType)'"
+                        }
+                    }
+                    else {
+                        Write-DebugLog -LogName $Log -LogEntryText "  No members found in sharing group '$spGroupName'"
+                    }
+                }
+                
                 foreach ($spUser in $spUsers) {
-                    if ($spUser -and $spUser.LoginName) {
-                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteProperties -AssociatedSPGroup $spGroupName -SPUserName $spUser.LoginName -SPUserTitle $spUser.Title -SPUserEmail $spUser.Email
+                    # Enhanced null checking - external users might have different property patterns
+                    $hasValidLoginName = -not [string]::IsNullOrWhiteSpace($spUser.LoginName)
+                    $hasValidId = $spUser.Id -ne $null -and $spUser.Id -gt 0
+                    
+                    if ($spUser -and ($hasValidLoginName -or $hasValidId)) {
+                        # Debug: Show what we're storing for sharing links groups
+                        if ($spGroupName -like "SharingLinks*") {
+                            Write-DebugLog -LogName $Log -LogEntryText "  Storing member for '$spGroupName': LoginName='$($spUser.LoginName)', Title='$($spUser.Title)', Email='$($spUser.Email)', Id='$($spUser.Id)', PrincipalType='$($spUser.PrincipalType)'"
+                        }
+                        
+                        # Use LoginName as primary identifier, fallback to Title if LoginName is empty (for some external users)
+                        $userIdentifier = if (-not [string]::IsNullOrWhiteSpace($spUser.LoginName)) { 
+                            $spUser.LoginName 
+                        }
+                        elseif (-not [string]::IsNullOrWhiteSpace($spUser.Title)) {
+                            $spUser.Title  # Fallback for edge cases
+                        }
+                        else {
+                            "User_$($spUser.Id)"  # Last resort fallback
+                        }
+                        
+                        Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteProperties -AssociatedSPGroup $spGroupName -SPUserName $userIdentifier -SPUserTitle $spUser.Title -SPUserEmail $spUser.Email
+                    }
+                    else {
+                        # Debug: Log why we're skipping this user with more detail
+                        if ($spGroupName -like "SharingLinks*") {
+                            Write-DebugLog -LogName $Log -LogEntryText "  Skipping member in '$spGroupName' - spUser is null: $($spUser -eq $null), LoginName: '$($spUser.LoginName)', Id: '$($spUser.Id)', Title: '$($spUser.Title)'"
+                        }
                     }
                 }
                 
