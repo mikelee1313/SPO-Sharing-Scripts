@@ -142,7 +142,7 @@ $appID = "abc64618-283f-47ba-a185-50d935d51d57"                 # This is your E
 $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certificate thumbprint
 $tenant = "9cfc42cb-51da-4055-87e9-b20a170b6ba3"                # This is your Tenant ID
 $searchRegion = "NAM"                                           # Region for Microsoft Graph search
-$Mode = "Detection"                                             # Set to "Detection" for report mode, "Remediation" to convert Organization sharing links to direct permissions
+$Mode = "Remediation"                                             # Set to "Detection" for report mode, "Remediation" to convert Organization sharing links to direct permissions
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
@@ -2225,7 +2225,7 @@ foreach ($site in $sites) {
                         return $standardUsers
                     }
                 } -Operation "Get members for group $spGroupName"
-                $null -eq $spUser$null -eq $spUser
+                
                 # Debug: Log the number of users found and their basic info
                 if ($spGroupName -like "SharingLinks*") {
                     Write-DebugLog -LogName $Log -LogEntryText "Sharing group '$spGroupName' has $($spUsers.Count) members"
