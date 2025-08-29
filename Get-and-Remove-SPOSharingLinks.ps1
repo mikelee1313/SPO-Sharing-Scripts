@@ -50,12 +50,36 @@
     If not specified, the script will process all sites in the tenant.
 
 .OUTPUTS
-    - CSV file containing detailed information about sharing links found
+    - CSV file containing detailed information about sharing links found, including search status for each document
     - Log file with operation details and errors
+    
+    CSV Output Columns:
+    - Site URL: SharePoint site containing the sharing link
+    - Site Owner: Owner of the SharePoint site
+    - IB Mode: Information Barrier mode setting
+    - IB Segment: Information Barrier segments
+    - Site Template: SharePoint site template
+    - Sharing Group Name: Name of the SharePoint sharing group
+    - Sharing Link Members: Users who have access through the sharing link
+    - File URL: Direct URL to the shared file or list item
+    - File Owner: Owner/creator of the shared file
+    - Filename: Name of the shared file or list item
+    - SharingType: Type of sharing (Organization, Flexible, etc.)
+    - Sharing Link URL: Direct URL of the sharing link
+    - Link Expiration Date: When the sharing link expires
+    - IsTeamsConnected: Whether the site is connected to Microsoft Teams
+    - SharingCapability: Site-level sharing capability setting
+    - Last Content Modified: Last modification date of the site content
+    - Search Status: Indicates if the document was found in search results
+      * "Found" - Document located and indexed in search
+      * "Not Found in Search" - Document exists but not indexed/searchable
+      * "Search Error" - Error occurred during search operation
+      * "Not Searched" - Search was not attempted
+    - Link Removed: Whether the sharing link was removed (in remediation mode)
 
 .NOTES
     Authors: Mike Lee
-    Updated: 8/28/2025
+    Updated: 8/29/2025
 
     - Requires PnP.PowerShell 2.x or above
     - Requires an Entra app registration with appropriate SharePoint permissions
@@ -478,7 +502,7 @@ $siteCollectionData = @{}
 # ----------------------------------------------
 # Initialize the sharing links output file with headers
 # ----------------------------------------------
-$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,Filename,SharingType,Sharing Link URL,Link Expiration Date,IsTeamsConnected,SharingCapability,Last Content Modified,Link Removed"
+$sharingLinksHeaders = "Site URL,Site Owner,IB Mode,IB Segment,Site Template,Sharing Group Name,Sharing Link Members,File URL,File Owner,Filename,SharingType,Sharing Link URL,Link Expiration Date,IsTeamsConnected,SharingCapability,Last Content Modified,Search Status,Link Removed"
 Set-Content -Path $sharingLinksOutputFile -Value $sharingLinksHeaders
 Write-InfoLog -LogName $Log -LogEntryText "Initialized sharing links output file: $sharingLinksOutputFile"
 
@@ -619,7 +643,7 @@ Function Write-SiteSharingLinks {
                 }
             }
             
-            # Format members as "Name <Email>" - handle empty groups with "No members"
+            # Format members as "Name <Email>" - handle empty groups based on search status
             $membersFormatted = if ($groupMembers.Count -gt 0) {
                 ($groupMembers | ForEach-Object {
                     $emailStr = if ($_.Email) { $_.Email | Out-String -NoNewline } else { "" }
@@ -627,7 +651,16 @@ Function Write-SiteSharingLinks {
                 }) -join ';'
             }
             else {
-                "No members"
+                # Check if the file was not searchable to provide better context for empty member lists
+                if ($searchStatus -eq "Not Found in Search") {
+                    "Not Searchable"
+                }
+                elseif ($searchStatus -eq "Search Error") {
+                    "Search Error"
+                }
+                else {
+                    "No members"
+                }
             }
             
             # Get document details if available
@@ -636,13 +669,15 @@ Function Write-SiteSharingLinks {
             $documentItemType = "Not found"
             $sharingLinkUrl = "Not found"
             $linkExpirationDate = "Not found"
+            $searchStatus = "Not Searched"
             if ($SiteData.ContainsKey("DocumentDetails") -and $SiteData["DocumentDetails"].ContainsKey($sharingGroup)) {
                 $documentUrl = $SiteData["DocumentDetails"][$sharingGroup]["DocumentUrl"]
                 $documentOwner = $SiteData["DocumentDetails"][$sharingGroup]["DocumentOwner"]
                 $documentItemType = $SiteData["DocumentDetails"][$sharingGroup]["DocumentItemType"]
                 $sharingLinkUrl = $SiteData["DocumentDetails"][$sharingGroup]["SharingLinkUrl"]
                 $linkExpirationDate = $SiteData["DocumentDetails"][$sharingGroup]["ExpirationDate"]
-                Write-DebugLog -LogName $Log -LogEntryText "Retrieved document details for $sharingGroup - URL: $documentUrl, Owner: $documentOwner, Type: $documentItemType, LinkURL: $sharingLinkUrl, Expiration: $linkExpirationDate"
+                $searchStatus = $SiteData["DocumentDetails"][$sharingGroup]["SearchStatus"]
+                Write-DebugLog -LogName $Log -LogEntryText "Retrieved document details for $sharingGroup - URL: $documentUrl, Owner: $documentOwner, Type: $documentItemType, LinkURL: $sharingLinkUrl, Expiration: $linkExpirationDate, SearchStatus: $searchStatus"
             }
             else {
                 Write-DebugLog -LogName $Log -LogEntryText "No document details found for sharing group: $sharingGroup. DocumentDetails exists: $($SiteData.ContainsKey('DocumentDetails')), Group key exists: $(if ($SiteData.ContainsKey('DocumentDetails')) { $SiteData['DocumentDetails'].ContainsKey($sharingGroup) } else { 'N/A' })"
@@ -656,7 +691,7 @@ Function Write-SiteSharingLinks {
             
             # Extract filename from the document URL
             $filename = "Not found"
-            if ($documentUrl -ne "Not found" -and -not [string]::IsNullOrWhiteSpace($documentUrl)) {
+            if ($documentUrl -ne "Not found" -and $documentUrl -ne "Not Searchable" -and $documentUrl -ne "Search Error" -and -not [string]::IsNullOrWhiteSpace($documentUrl)) {
                 try {
                     if ($documentUrl -match "DispForm\.aspx\?ID=(\d+)") {
                         # This is a list item - try to get a meaningful name
@@ -684,6 +719,12 @@ Function Write-SiteSharingLinks {
                     Write-DebugLog -LogName $Log -LogEntryText "Could not extract filename from URL: $documentUrl. Error: $_"
                     $filename = "Extraction Error"
                 }
+            }
+            elseif ($documentUrl -eq "Not Searchable") {
+                $filename = "Not Searchable"
+            }
+            elseif ($documentUrl -eq "Search Error") {
+                $filename = "Search Error"
             }
             
             # Determine sharing type based on sharing group name
@@ -713,6 +754,7 @@ Function Write-SiteSharingLinks {
                 "IsTeamsConnected"      = $SiteData.IsTeamsConnected
                 "SharingCapability"     = $SiteData.SharingCapability
                 "Last Content Modified" = $SiteData.LastContentModifiedDate
+                "Search Status"         = $searchStatus
                 "Link Removed"          = $linkRemoved
             }
             
@@ -1574,7 +1616,7 @@ Function Test-AndParseScriptCsvOutput {
         $firstLine = Get-Content -Path $FilePath -TotalCount 1
         
         # Check if this looks like our script's CSV output format
-        $expectedHeaders = @("Site URL", "Site Owner", "IB Mode", "IB Segment", "Site Template", "Sharing Group Name", "Sharing Link Members", "File URL", "File Owner", "IsTeamsConnected", "SharingCapability", "Last Content Modified", "Link Removed")
+        $expectedHeaders = @("Site URL", "Site Owner", "IB Mode", "IB Segment", "Site Template", "Sharing Group Name", "Sharing Link Members", "File URL", "File Owner", "IsTeamsConnected", "SharingCapability", "Last Content Modified", "Search Status", "Link Removed")
         
         if ($firstLine -and $firstLine.Contains("Sharing Group Name")) {
             Write-Host "Detected script's CSV output format - will process Organization sharing links only" -ForegroundColor Cyan
@@ -2183,7 +2225,7 @@ foreach ($site in $sites) {
                         return $standardUsers
                     }
                 } -Operation "Get members for group $spGroupName"
-                
+                $null -eq $spUser$null -eq $spUser
                 # Debug: Log the number of users found and their basic info
                 if ($spGroupName -like "SharingLinks*") {
                     Write-DebugLog -LogName $Log -LogEntryText "Sharing group '$spGroupName' has $($spUsers.Count) members"
@@ -2241,6 +2283,7 @@ foreach ($site in $sites) {
                             $documentUrl = ""
                             $documentOwner = ""
                             $documentItemType = ""
+                            $searchStatus = "Not Searched"  # Track if document was found in search results
                             
                             # Determine sharing type from group name
                             if ($spGroupName -like "*OrganizationView*") {
@@ -2271,6 +2314,7 @@ foreach ($site in $sites) {
                                     Write-DebugLog -LogName $Log -LogEntryText "Search result for document ID $documentId - Found: $($searchResult.Found), URL: '$($searchResult.DocumentUrl)', Owner: '$($searchResult.DocumentOwner)', Type: '$($searchResult.ItemType)'"
                                     
                                     if ($searchResult.Found) {
+                                        $searchStatus = "Found"
                                         if ($searchResult.DocumentUrl) {
                                             $documentUrl = $searchResult.DocumentUrl
                                         }
@@ -2283,13 +2327,28 @@ foreach ($site in $sites) {
                                             $documentItemType = $searchResult.ItemType
                                         }
                                     }
+                                    else {
+                                        $searchStatus = "Not Found in Search"
+                                        # Set default values to indicate the file was not searchable
+                                        $documentUrl = "Not Searchable"
+                                        $documentOwner = "Not Searchable"
+                                        $documentItemType = "Not Searchable"
+                                    }
                                 }
                                 else {
                                     Write-LogEntry -LogName $Log -LogEntryText "Unable to get Graph access token for document search." -Level "ERROR"
+                                    $searchStatus = "Search Error"
+                                    $documentUrl = "Search Error"
+                                    $documentOwner = "Search Error"
+                                    $documentItemType = "Search Error"
                                 }
                             }
                             catch {
                                 Write-ErrorLog -LogName $Log -LogEntryText "Error searching for document via Graph API: ${_}"
+                                $searchStatus = "Search Error"
+                                $documentUrl = "Search Error"
+                                $documentOwner = "Search Error"
+                                $documentItemType = "Search Error"
                             }
                             
                             # Store the sharing link information 
@@ -2304,6 +2363,7 @@ foreach ($site in $sites) {
                                 "DocumentUrl"      = $documentUrl
                                 "DocumentOwner"    = $documentOwner
                                 "DocumentItemType" = $documentItemType
+                                "SearchStatus"     = $searchStatus
                                 "SharedOn"         = $siteUrl
                                 "SharingLinkUrl"   = "" # Will be populated when processing sharing links
                                 "ExpirationDate"   = "" # Will be populated when processing sharing links
