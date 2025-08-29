@@ -4,7 +4,8 @@
 
 .DESCRIPTION
     This script scans SharePoint Online sites to identify all sharing links, with a focus on Organization sharing links. 
-    It can optionally convert Organization sharing links to direct permissions and clean up corrupted sharing groups.
+    It can optionally convert Organization sharing links to direct permissions and clean up corrupted Organization sharing groups.
+    Flexible sharing links are detected and reported but never modified in remediation mode.
     The script supports scanning all sites in a tenant or a specific list of sites from a CSV file.
 
 .PARAMETER tenantname
@@ -25,12 +26,13 @@
 .PARAMETER Mode
     Sets the script operation mode:
     - "Detection": Only inventories sharing links without making any modifications (report mode)
-    - "Remediation": Converts Organization sharing links to direct permissions and removes sharing groups (remediation mode)
+    - "Remediation": Converts Organization sharing links to direct permissions and removes Organization sharing groups (remediation mode). Flexible sharing links are not modified.
     Default: "Detection"
 
 .PARAMETER cleanupCorruptedSharingGroups
-    When set to $true, the script attempts to clean up empty or corrupted sharing groups.
+    When set to $true, the script attempts to clean up empty or corrupted Organization sharing groups.
     When set to $false, no cleanup of sharing groups is performed.
+    Note: Flexible sharing groups are never affected by cleanup operations.
     Note: This is automatically set to $true when Mode is set to "Remediation".
 
 .PARAMETER debugLogging
@@ -288,7 +290,7 @@ else {
 }
 
 Write-Host "Script is running in $scriptMode mode" -ForegroundColor $(if ($convertOrganizationLinks) { "Yellow" } else { "Cyan" })
-Write-InfoLog -LogName $Log -LogEntryText "Script is running in $scriptMode mode - $(if ($convertOrganizationLinks) { 'Converting Organization links to direct permissions and removing sharing links' } else { 'Only detecting and inventorying sharing links, no modifications will be made' })"
+Write-InfoLog -LogName $Log -LogEntryText "Script is running in $scriptMode mode - $(if ($convertOrganizationLinks) { 'Converting Organization links to direct permissions and removing Organization sharing groups (flexible links are preserved)' } else { 'Only detecting and inventorying sharing links, no modifications will be made' })"
 
 
 # ----------------------------------------------
@@ -1539,8 +1541,8 @@ Function Remove-CorruptedSharingGroups {
         [string] $SiteUrl
     )
     
-    Write-Host "  Checking for corrupted sharing groups on site: $SiteUrl" -ForegroundColor Yellow
-    Write-LogEntry -LogName $Log -LogEntryText "Checking for corrupted sharing groups on site: $SiteUrl" -Level "INFO"
+    Write-Host "  Checking for corrupted sharing groups on site: $SiteUrl (excluding flexible links)" -ForegroundColor Yellow
+    Write-LogEntry -LogName $Log -LogEntryText "Checking for corrupted sharing groups on site: $SiteUrl (excluding flexible sharing links)" -Level "INFO"
     
     try {
         # Connect to the specific site
@@ -1560,6 +1562,12 @@ Function Remove-CorruptedSharingGroups {
         
         foreach ($sharingGroup in $allSharingGroups) {
             try {
+                # Skip flexible sharing links - only clean up Organization sharing groups in remediation mode
+                if ($sharingGroup.Title -like "*Flexible*") {
+                    Write-DebugLog -LogName $Log -LogEntryText "Skipping flexible sharing group from cleanup: $($sharingGroup.Title)"
+                    continue
+                }
+                
                 # Check if group has any members
                 $groupMembers = Invoke-WithThrottleHandling -ScriptBlock {
                     Get-PnPGroupMember -Identity $sharingGroup.Id -ErrorAction SilentlyContinue
@@ -2118,8 +2126,9 @@ Write-Host "======================================================" -ForegroundC
 Write-Host "SCRIPT MODE: $scriptMode" -ForegroundColor $(if ($convertOrganizationLinks) { "Yellow" } else { "Cyan" })
 if ($convertOrganizationLinks) {
     Write-Host "  - Organization sharing links will be CONVERTED to direct permissions" -ForegroundColor Yellow
-    Write-Host "  - Sharing links will be REMOVED after converting users" -ForegroundColor Yellow
-    Write-Host "  - Empty sharing groups will be cleaned up automatically" -ForegroundColor Yellow
+    Write-Host "  - Organization sharing links will be REMOVED after converting users" -ForegroundColor Yellow
+    Write-Host "  - Empty Organization sharing groups will be cleaned up automatically" -ForegroundColor Yellow
+    Write-Host "  - Flexible sharing links will be PRESERVED (not modified)" -ForegroundColor Green
     Write-Host "  - Results will be saved to: $sharingLinksOutputFile" -ForegroundColor Yellow
 }
 else {
@@ -2429,7 +2438,7 @@ if ($sitesWithSharingLinksCount -gt 0) {
     
     if ($convertOrganizationLinks) {
         Write-Host "Processed Organization sharing links on $organizationLinksProcessedCount sites" -ForegroundColor Green
-        Write-Host "  Mode: REMEDIATION - Links were converted to direct permissions and removed" -ForegroundColor Yellow
+        Write-Host "  Mode: REMEDIATION - Organization links were converted to direct permissions and removed (flexible links preserved)" -ForegroundColor Yellow
         Write-Host "  Group cleanup: ENABLED - Empty sharing groups were cleaned up" -ForegroundColor Yellow
         Write-InfoLog -LogName $Log -LogEntryText "Processed Organization sharing links on $organizationLinksProcessedCount sites in REMEDIATION mode (convertOrganizationLinks=$convertOrganizationLinks, cleanupCorruptedSharingGroups=$cleanupCorruptedSharingGroups)"
     }
