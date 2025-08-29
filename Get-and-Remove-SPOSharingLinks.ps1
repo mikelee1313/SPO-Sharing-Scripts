@@ -142,7 +142,7 @@ $appID = "abc64618-283f-47ba-a185-50d935d51d57"                 # This is your E
 $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certificate thumbprint
 $tenant = "9cfc42cb-51da-4055-87e9-b20a170b6ba3"                # This is your Tenant ID
 $searchRegion = "NAM"                                           # Region for Microsoft Graph search
-$Mode = "Remediation"                                             # Set to "Detection" for report mode, "Remediation" to convert Organization sharing links to direct permissions
+$Mode = "Detection"                                             # Set to "Detection" for report mode, "Remediation" to convert Organization sharing links to direct permissions
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
