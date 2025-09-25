@@ -16,7 +16,7 @@ Scans SharePoint Online sites to identify all files and folders and their permis
 
 ### [Get-SPSitesAndUsersInfo.ps1](https://github.com/mikelee1313/SPO-Sharing-Scripts/blob/main/Get-SPSitesAndUsersInfo.ps1)  
 Collects comprehensive information about SPO sites and users, including site properties, group memberships, direct users, Entra/M365 Group associations, and access details, exporting results to CSV.  
-- **Documentation:** [README - Get-SPSitesAndUsersInfo.md](https://github.com/mikelee1313/SPO-Sharing-Scripts/blob/main/README%20-%20Get-SPSitesAndUsersInfo.md)
+- **Documentation:** [Readme-Get-SPOSitesAndUserInfo.md](https://github.com/mikelee1313/SPO-Sharing-Scripts/blob/main/Readme-Get-SPSitesAndUsersInfo.md)
 
 ---
 
