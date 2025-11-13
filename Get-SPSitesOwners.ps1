@@ -26,7 +26,7 @@
     File Name      : Get-SPSitesOwners.ps1
     Author         : Mike Lee / Andrew Thompson
     Prerequisite   : PnP.PowerShell module installed
-    Date           : 10/28/25     
+    Date           : 11/13/25     
     Version        : 3.0
 
     Requirements:
@@ -38,7 +38,7 @@
         - Certificate-based authentication configured
     
     The script collects owners from:
-        - Site Owner property (from site settings)
+        - SharePoint Site Owners Group members
         - Site Collection Administrators
         - Entra (M365) Group Owners (for group-connected sites)
 
@@ -227,7 +227,7 @@ $totalSites = $sites.Count # Total number of sites to process
 $processedCount = 0 # Counter for processed sites
 
 # Define CSV Headers for the output file
-$csvHeaders = "URL,Site Owner,Site Collection Admins,Entra Group Owners"
+$csvHeaders = "URL,SharePoint Site Owners,Site Collection Admins,Entra Group Owners"
 
 # Create the output CSV file and write the headers
 Set-Content -Path $outputfile -Value $csvHeaders -Encoding UTF8
@@ -242,7 +242,7 @@ foreach ($site in $sites) {
     Write-LogEntry -LogName $Log -LogEntryText "Processing site $processedCount/$totalSites : $siteUrl"
 
     # Initialize owner collections
-    $siteOwner = ""
+    $spSiteOwners = @()
     $siteAdmins = @()
     $entraOwners = @()
 
@@ -252,9 +252,9 @@ foreach ($site in $sites) {
             Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop 
         } -Operation "Connect to Admin URL for site props $siteUrl" -LogName $Log
         
-        # Get tenant-level site properties (URL, Owner, and GroupId)
+        # Get tenant-level site properties (URL and GroupId)
         $siteprops = Invoke-PnPWithRetry -ScriptBlock { 
-            Get-PnPTenantSite -Identity $siteUrl | Select-Object Url, Owner, GroupId
+            Get-PnPTenantSite -Identity $siteUrl | Select-Object Url, GroupId
         } -Operation "Get-PnPTenantSite for $siteUrl" -LogName $Log
 
         # If site properties couldn't be retrieved, log error and skip to the next site
@@ -263,14 +263,45 @@ foreach ($site in $sites) {
             continue 
         }
 
-        # Store the basic site owner
-        $siteOwner = $siteprops.Owner
-
-        # Connect to the specific site to get additional owner information
+        # Connect to the specific site to get owner information
         try {
             Invoke-PnPWithRetry -ScriptBlock { 
                 Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop 
             } -Operation "Connect to site $siteUrl" -LogName $Log
+
+            # Get SharePoint Site Owners Group members
+            try {
+                # Get the Owners group (typically has "Owners" in the name)
+                $ownersGroup = Invoke-PnPWithRetry -ScriptBlock { 
+                    Get-PnPGroup | Where-Object { $_.Title -like "*Owners*" }
+                } -Operation "Get Owners Group for $siteUrl" -LogName $Log
+                
+                if ($ownersGroup) {
+                    # Get members of the Owners group
+                    $ownersGroupMembers = Invoke-PnPWithRetry -ScriptBlock { 
+                        Get-PnPGroupMember -Identity $ownersGroup.Id
+                    } -Operation "Get Owners Group Members for $siteUrl" -LogName $Log
+                    
+                    foreach ($member in $ownersGroupMembers) {
+                        if ($member.Email) {
+                            $spSiteOwners += "$($member.Title) <$($member.Email)>"
+                        }
+                        elseif ($member.LoginName) {
+                            $spSiteOwners += "$($member.Title) ($($member.LoginName))"
+                        }
+                        else {
+                            $spSiteOwners += $member.Title
+                        }
+                    }
+                    Write-LogEntry -LogName $Log -LogEntryText "Found $($spSiteOwners.Count) members in SharePoint Owners group for $siteUrl"
+                }
+                else {
+                    Write-LogEntry -LogName $Log -LogEntryText "No Owners group found for $siteUrl" -LogLevel "WARNING"
+                }
+            }
+            catch {
+                Write-LogEntry -LogName $Log -LogEntryText "Error retrieving SharePoint Owners group members for $siteUrl : $_" -LogLevel "WARNING"
+            }
 
             # Get Site Collection Administrators
             try {
@@ -326,10 +357,10 @@ foreach ($site in $sites) {
 
         # Create output object with all owner information
         $exportItem = [PSCustomObject]@{
-            URL                     = $siteprops.Url
-            "Site Owner"            = $siteOwner
+            URL                      = $siteprops.Url
+            "SharePoint Site Owners" = ($spSiteOwners -join '; ')
             "Site Collection Admins" = ($siteAdmins -join '; ')
-            "Entra Group Owners"    = ($entraOwners -join '; ')
+            "Entra Group Owners"     = ($entraOwners -join '; ')
         }
 
         # Export to CSV
