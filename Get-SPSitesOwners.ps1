@@ -271,32 +271,66 @@ foreach ($site in $sites) {
 
             # Get SharePoint Site Owners Group members
             try {
-                # Get the Owners group (typically has "Owners" in the name)
-                $ownersGroup = Invoke-PnPWithRetry -ScriptBlock { 
-                    Get-PnPGroup | Where-Object { $_.Title -like "*Owners*" }
-                } -Operation "Get Owners Group for $siteUrl" -LogName $Log
+                # Try to get the Associated Owner Group first (most reliable method)
+                $ownersGroup = $null
+                
+                try {
+                    $web = Invoke-PnPWithRetry -ScriptBlock { 
+                        Get-PnPWeb -Includes AssociatedOwnerGroup
+                    } -Operation "Get Web with Associated Owner Group for $siteUrl" -LogName $Log
+                    
+                    if ($web.AssociatedOwnerGroup) {
+                        $ownersGroup = $web.AssociatedOwnerGroup
+                        Write-LogEntry -LogName $Log -LogEntryText "Found Associated Owner Group: $($ownersGroup.Title) for $siteUrl"
+                    }
+                }
+                catch {
+                    Write-LogEntry -LogName $Log -LogEntryText "Could not retrieve AssociatedOwnerGroup for $siteUrl, will try alternate methods" -LogLevel "WARNING"
+                }
+                
+                # Fallback: If AssociatedOwnerGroup didn't work, look for groups with "Owners" in the name
+                if (-not $ownersGroup) {
+                    $ownersGroup = Invoke-PnPWithRetry -ScriptBlock { 
+                        Get-PnPGroup | Where-Object { $_.Title -like "*Owners" -or $_.Title -like "*owners" }
+                    } -Operation "Get Owners Group by name for $siteUrl" -LogName $Log
+                    
+                    if ($ownersGroup -and $ownersGroup.Count -gt 1) {
+                        # If multiple groups found, take the first one
+                        $ownersGroup = $ownersGroup[0]
+                    }
+                }
                 
                 if ($ownersGroup) {
+                    Write-LogEntry -LogName $Log -LogEntryText "Using Owners Group: '$($ownersGroup.Title)' (ID: $($ownersGroup.Id)) for $siteUrl"
+                    
                     # Get members of the Owners group
                     $ownersGroupMembers = Invoke-PnPWithRetry -ScriptBlock { 
                         Get-PnPGroupMember -Identity $ownersGroup.Id
                     } -Operation "Get Owners Group Members for $siteUrl" -LogName $Log
                     
-                    foreach ($member in $ownersGroupMembers) {
-                        if ($member.Email) {
-                            $spSiteOwners += "$($member.Title) <$($member.Email)>"
+                    if ($ownersGroupMembers) {
+                        foreach ($member in $ownersGroupMembers) {
+                            # Skip groups nested within the owners group, only get users
+                            if ($member.PrincipalType -eq "User" -or $member.PrincipalType -eq 1) {
+                                if ($member.Email) {
+                                    $spSiteOwners += "$($member.Title) <$($member.Email)>"
+                                }
+                                elseif ($member.LoginName) {
+                                    $spSiteOwners += "$($member.Title) ($($member.LoginName))"
+                                }
+                                else {
+                                    $spSiteOwners += $member.Title
+                                }
+                            }
                         }
-                        elseif ($member.LoginName) {
-                            $spSiteOwners += "$($member.Title) ($($member.LoginName))"
-                        }
-                        else {
-                            $spSiteOwners += $member.Title
-                        }
+                        Write-LogEntry -LogName $Log -LogEntryText "Found $($spSiteOwners.Count) user members in SharePoint Owners group '$($ownersGroup.Title)' for $siteUrl"
                     }
-                    Write-LogEntry -LogName $Log -LogEntryText "Found $($spSiteOwners.Count) members in SharePoint Owners group for $siteUrl"
+                    else {
+                        Write-LogEntry -LogName $Log -LogEntryText "Owners group '$($ownersGroup.Title)' exists but has no members for $siteUrl" -LogLevel "WARNING"
+                    }
                 }
                 else {
-                    Write-LogEntry -LogName $Log -LogEntryText "No Owners group found for $siteUrl" -LogLevel "WARNING"
+                    Write-LogEntry -LogName $Log -LogEntryText "No Owners group found for $siteUrl using any method" -LogLevel "WARNING"
                 }
             }
             catch {
