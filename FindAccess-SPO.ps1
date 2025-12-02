@@ -93,6 +93,7 @@
     Author         : Mike Lee
     Prerequisite   : PnP PowerShell module, App-Only authentication setup
     Created Date   : 10/1/2025
+    Updated:       : 12/2/2025
     Version        : 2.0 (Converted to PnP PowerShell with App-Only Authentication)
 
 Disclaimer: The sample scripts are provided AS IS without warranty  
@@ -163,34 +164,20 @@ $baseRetryDelay = 30  # Base retry delay in seconds (will be increased with expo
 # =================================================================================================
 
 
-#Connect to SharePoint Online using PnP PowerShell with App-Only Authentication
-try {
-    Write-StatusMessage "Connecting to SharePoint Online using App-Only Authentication..." -ForegroundColor Green
-    Connect-PnPOnline -Url "https://$t-admin.sharepoint.com" -ClientId $appID -Thumbprint $thumbprint -Tenant $tenant
-    Write-StatusMessage "Successfully connected to SharePoint Online" -ForegroundColor Green
-    
-    if ($enableThrottlingProtection) {
-        Write-DebugInfo "Throttling protection is ENABLED with the following settings:" -ForegroundColor Green
-        Write-DebugInfo "  - Base delay between sites: $baseDelayBetweenSites seconds" -ForegroundColor Gray
-        Write-DebugInfo "  - Base delay between users: $baseDelayBetweenUsers seconds" -ForegroundColor Gray
-        Write-DebugInfo "  - Max retry attempts: $maxRetryAttempts" -ForegroundColor Gray
-        Write-DebugInfo "  - Base retry delay: $baseRetryDelay seconds" -ForegroundColor Gray
+# =================================================================================================
+# FUNCTION DEFINITIONS
+# =================================================================================================
+
+#This is the logging function - MUST be defined first as other functions depend on it
+Function Write-LogEntry {
+    param(
+        [string] $LogName ,
+        [string] $LogEntryText
+    )
+    if ($LogName -NotLike $Null) {
+        # log the date and time in the text file along with the data passed
+        "$([DateTime]::Now.ToShortDateString()) $([DateTime]::Now.ToShortTimeString()) : $LogEntryText" | Out-File -FilePath $LogName -append;
     }
-    else {
-        Write-DebugInfo "⚠️ WARNING: Throttling protection is DISABLED" -ForegroundColor Yellow
-    }
-    
-    # Show debug mode status
-    if ($debug) {
-        Write-DebugInfo "DEBUG MODE: ENABLED - Detailed output will be shown" -ForegroundColor Cyan
-    }
-    else {
-        Write-DebugInfo "DEBUG MODE: DISABLED - Minimal output will be shown" -ForegroundColor Gray
-    }
-}
-catch {
-    Write-StatusMessage "Failed to connect to SharePoint Online: $($_.Exception.Message)" -ForegroundColor Red
-    exit
 }
 
 # Debug-aware output functions
@@ -239,42 +226,6 @@ Function Write-StatusMessage {
     
     # Always log status messages
     Write-LogEntry -LogName:$log -LogEntryText $Message
-}
-
-# Note: PnP PowerShell can handle Entra ID groups directly, no separate Graph connection needed
-
-#Initialize Parameters - Do not change
-$user = @()
-$date = @()
-$outputfile = @()
-$log = @()
-$date = Get-Date -Format yyyy-MM-dd_HH-mm-ss
-$firstWrite = $true
-
-#OutPut and Log Files
-$outputfile = "$env:TEMP\" + 'SiteUsers_' + $date + "output.csv"
-$log = "$env:TEMP\" + 'SiteUsers_' + $date + '_' + "logfile.log"
-
-#Get All Sites that are not Group Connected and exclude system/service sites
-$sites = Get-PnPTenantSite | Where-Object {
-    $_.Template -ne 'RedirectSite#0' -and
-    $_.Template -notlike 'SRCHCEN*' -and
-    $_.Template -notlike 'SRCHCENTERLITE*' -and
-    $_.Template -notlike 'SPSMSITEHOST*' -and
-    $_.Template -notlike 'APPCATALOG*' -and
-    $_.Template -notlike 'REDIRECTSITE*'
-}
-
-#This is the logging function
-Function Write-LogEntry {
-    param(
-        [string] $LogName ,
-        [string] $LogEntryText
-    )
-    if ($LogName -NotLike $Null) {
-        # log the date and time in the text file along with the data passed
-        "$([DateTime]::Now.ToShortDateString()) $([DateTime]::Now.ToShortTimeString()) : $LogEntryText" | Out-File -FilePath $LogName -append;
-    }
 }
 
 # Function to handle SharePoint throttling with exponential backoff and retry logic
@@ -451,6 +402,68 @@ Function Test-EntraGroupMembership {
         return $false
     }
 }
+
+# =================================================================================================
+# CONNECTION AND INITIALIZATION
+# =================================================================================================
+
+#Connect to SharePoint Online using PnP PowerShell with App-Only Authentication
+try {
+    Write-StatusMessage "Connecting to SharePoint Online using App-Only Authentication..." -ForegroundColor Green
+    Connect-PnPOnline -Url "https://$t-admin.sharepoint.com" -ClientId $appID -Thumbprint $thumbprint -Tenant $tenant
+    Write-StatusMessage "Successfully connected to SharePoint Online" -ForegroundColor Green
+    
+    if ($enableThrottlingProtection) {
+        Write-DebugInfo "Throttling protection is ENABLED with the following settings:" -ForegroundColor Green
+        Write-DebugInfo "  - Base delay between sites: $baseDelayBetweenSites seconds" -ForegroundColor Gray
+        Write-DebugInfo "  - Base delay between users: $baseDelayBetweenUsers seconds" -ForegroundColor Gray
+        Write-DebugInfo "  - Max retry attempts: $maxRetryAttempts" -ForegroundColor Gray
+        Write-DebugInfo "  - Base retry delay: $baseRetryDelay seconds" -ForegroundColor Gray
+    }
+    else {
+        Write-DebugInfo "⚠️ WARNING: Throttling protection is DISABLED" -ForegroundColor Yellow
+    }
+    
+    # Show debug mode status
+    if ($debug) {
+        Write-DebugInfo "DEBUG MODE: ENABLED - Detailed output will be shown" -ForegroundColor Cyan
+    }
+    else {
+        Write-DebugInfo "DEBUG MODE: DISABLED - Minimal output will be shown" -ForegroundColor Gray
+    }
+}
+catch {
+    Write-StatusMessage "Failed to connect to SharePoint Online: $($_.Exception.Message)" -ForegroundColor Red
+    exit
+}
+
+# Note: PnP PowerShell can handle Entra ID groups directly, no separate Graph connection needed
+
+#Initialize Parameters - Do not change
+$user = @()
+$date = @()
+$outputfile = @()
+$log = @()
+$date = Get-Date -Format yyyy-MM-dd_HH-mm-ss
+$firstWrite = $true
+
+#OutPut and Log Files
+$outputfile = "$env:TEMP\" + 'SiteUsers_' + $date + "output.csv"
+$log = "$env:TEMP\" + 'SiteUsers_' + $date + '_' + "logfile.log"
+
+#Get All Sites that are not Group Connected and exclude system/service sites
+$sites = Get-PnPTenantSite | Where-Object {
+    $_.Template -ne 'RedirectSite#0' -and
+    $_.Template -notlike 'SRCHCEN*' -and
+    $_.Template -notlike 'SRCHCENTERLITE*' -and
+    $_.Template -notlike 'SPSMSITEHOST*' -and
+    $_.Template -notlike 'APPCATALOG*' -and
+    $_.Template -notlike 'REDIRECTSITE*'
+}
+
+# =================================================================================================
+# MAIN PROCESSING LOOP
+# =================================================================================================
 
 #Starting Loop for All Sites
 foreach ($site in $sites) {
