@@ -2388,8 +2388,11 @@ foreach ($site in $sites) {
                             elseif ($spGroupName -like '*OrganizationEdit*') {
                                 $sharingType = 'OrganizationEdit'
                             }
-                            elseif ($spGroupName -like '*AnonymousAccess*') {
-                                $sharingType = 'AnonymousAccess'
+                            elseif ($spGroupName -like '*AnonymousEdit*') {
+                                $sharingType = 'AnonymousEdit'
+                            }
+                            elseif ($spGroupName -like '*AnonymousView*') {
+                                $sharingType = 'AnonymousView'
                             }
 
                             # Try to find the document using Microsoft Graph
