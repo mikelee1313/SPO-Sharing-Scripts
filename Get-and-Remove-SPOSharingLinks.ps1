@@ -85,7 +85,7 @@
 
     - Requires PnP.PowerShell 2.x or above
     - Requires an Entra app registration with appropriate SharePoint permissions
-       - The app must have:
+    - The app must have:
         - Sharepoint:Sites.FullControl.All
         - SharePoint:User.Read.All
         - Graph:Sites.FullControl.All
@@ -298,10 +298,10 @@ else {
 }
 
 Write-Host "Script is running in $scriptMode mode" -ForegroundColor $(if ($convertOrganizationLinks) {
-        'Yellow' 
+        'Yellow'
     }
     else {
-        'Cyan' 
+        'Cyan'
     })
 Write-InfoLog -LogName $Log -LogEntryText "Script is running in $scriptMode mode - $(if ($convertOrganizationLinks) { 'Converting Organization links to direct permissions and removing Organization sharing groups (flexible links are preserved)' } else { 'Only detecting and inventorying sharing links, no modifications will be made' })"
 
@@ -378,10 +378,10 @@ function Invoke-WithThrottleHandling {
                     $timeUnit = $matches[2]
 
                     $waitTime = if ($timeUnit -eq 'minutes') {
-                        $timeValue * 60 
+                        $timeValue * 60
                     }
                     else {
-                        $timeValue 
+                        $timeValue
                     }
                     Write-DebugLog -LogName $Log -LogEntryText "PnP throttling detected for $Operation. Waiting for $waitTime seconds."
                 }
@@ -667,10 +667,10 @@ function Write-SiteSharingLinks {
             $membersFormatted = if ($groupMembers.Count -gt 0) {
                 ($groupMembers | ForEach-Object {
                     $emailStr = if ($_.Email) {
-                        $_.Email | Out-String -NoNewline 
+                        $_.Email | Out-String -NoNewline
                     }
                     else {
-                        '' 
+                        ''
                     }
                     "$($_.Name) <$emailStr>"
                 }) -join ';'
@@ -712,10 +712,10 @@ function Write-SiteSharingLinks {
             $linkRemoved = 'False'
             if ($SiteData.ContainsKey('Link Removal Status') -and $SiteData['Link Removal Status'].ContainsKey($sharingGroup)) {
                 $linkRemoved = if ($SiteData['Link Removal Status'][$sharingGroup]) {
-                    'True' 
+                    'True'
                 }
                 else {
-                    'False' 
+                    'False'
                 }
             }
 
@@ -889,7 +889,7 @@ function Convert-OrganizationSharingLinks {
             # Process each member using the WORKING approach from GitHub script
             foreach ($member in $groupMembers) {
                 if (!$member -or !$member.LoginName) {
-                    continue 
+                    continue
                 }
 
                 try {
@@ -1957,8 +1957,6 @@ function Get-SharingLinkUrls {
                 $documentId = $matches[1]
                 Write-DebugLog -LogName $Log -LogEntryText "Processing sharing group: $groupName with document ID: $documentId"
 
-
-
                 # Check if we have document details for this group
                 if ($siteCollectionData[$SiteUrl].ContainsKey('DocumentDetails') -and
                     $siteCollectionData[$SiteUrl]['DocumentDetails'].ContainsKey($groupName) -and
@@ -2028,22 +2026,22 @@ function Get-SharingLinkUrls {
                                     foreach ($identity in $matchingLink.GrantedToIdentitiesV2) {
                                         if ($identity.User) {
                                             $memberEmail = if ($identity.User.Email) {
-                                                $identity.User.Email 
+                                                $identity.User.Email
                                             }
                                             else {
-                                                '' 
+                                                ''
                                             }
                                             $memberDisplayName = if ($identity.User.DisplayName) {
-                                                $identity.User.DisplayName 
+                                                $identity.User.DisplayName
                                             }
                                             else {
-                                                $memberEmail 
+                                                $memberEmail
                                             }
                                             $memberLoginName = if ($identity.User.Id) {
-                                                $identity.User.Id 
+                                                $identity.User.Id
                                             }
                                             else {
-                                                $memberEmail 
+                                                $memberEmail
                                             }
 
                                             Write-DebugLog -LogName $Log -LogEntryText "  GrantedToIdentitiesV2 member: DisplayName='$memberDisplayName', Email='$memberEmail', Id='$memberLoginName'"
@@ -2074,22 +2072,22 @@ function Get-SharingLinkUrls {
                                     foreach ($grantee in $matchingLink.GrantedToV2) {
                                         if ($grantee.User) {
                                             $memberEmail = if ($grantee.User.Email) {
-                                                $grantee.User.Email 
+                                                $grantee.User.Email
                                             }
                                             else {
-                                                '' 
+                                                ''
                                             }
                                             $memberDisplayName = if ($grantee.User.DisplayName) {
-                                                $grantee.User.DisplayName 
+                                                $grantee.User.DisplayName
                                             }
                                             else {
-                                                $memberEmail 
+                                                $memberEmail
                                             }
                                             $memberLoginName = if ($grantee.User.Id) {
-                                                $grantee.User.Id 
+                                                $grantee.User.Id
                                             }
                                             else {
-                                                $memberEmail 
+                                                $memberEmail
                                             }
 
                                             Write-DebugLog -LogName $Log -LogEntryText "  GrantedToV2 member: DisplayName='$memberDisplayName', Email='$memberEmail', Id='$memberLoginName'"
@@ -2183,17 +2181,18 @@ $organizationLinksProcessedCount = 0
 # Display script mode information again before starting site processing
 Write-Host ''
 Write-Host '======================================================' -ForegroundColor $(if ($convertOrganizationLinks) {
-        'Yellow' 
+        'Yellow'
     }
     else {
-        'Cyan' 
+        'Cyan'
     })
 Write-Host "SCRIPT MODE: $scriptMode" -ForegroundColor $(if ($convertOrganizationLinks) {
-        'Yellow' 
+        'Yellow'
     }
     else {
-        'Cyan' 
+        'Cyan'
     })
+
 if ($convertOrganizationLinks) {
     Write-Host '  - Organization sharing links will be CONVERTED to direct permissions' -ForegroundColor Yellow
     Write-Host '  - Organization sharing links will be REMOVED after converting users' -ForegroundColor Yellow
@@ -2207,10 +2206,10 @@ else {
     Write-Host "  - Results will be saved to: $sharingLinksOutputFile" -ForegroundColor Cyan
 }
 Write-Host '======================================================' -ForegroundColor $(if ($convertOrganizationLinks) {
-        'Yellow' 
+        'Yellow'
     }
     else {
-        'Cyan' 
+        'Cyan'
     })
 Write-Host ''
 Write-InfoLog -LogName $Log -LogEntryText "Starting to process $totalSites sites in $scriptMode mode"
