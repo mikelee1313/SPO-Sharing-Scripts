@@ -699,6 +699,7 @@ function Write-SiteSharingLinks {
                 $documentUrl = $SiteData['DocumentDetails'][$sharingGroup]['DocumentUrl']
                 $documentOwner = $SiteData['DocumentDetails'][$sharingGroup]['DocumentOwner']
                 $documentItemType = $SiteData['DocumentDetails'][$sharingGroup]['DocumentItemType']
+                $documentLastModified = $SiteData['DocumentDetails'][$sharingGroup]['DocumentLastModified']
                 $sharingLinkUrl = $SiteData['DocumentDetails'][$sharingGroup]['SharingLinkUrl']
                 $linkExpirationDate = $SiteData['DocumentDetails'][$sharingGroup]['ExpirationDate']
                 $searchStatus = $SiteData['DocumentDetails'][$sharingGroup]['SearchStatus']
@@ -783,7 +784,7 @@ function Write-SiteSharingLinks {
                 'Link Expiration Date'  = $linkExpirationDate
                 'IsTeamsConnected'      = $SiteData.IsTeamsConnected
                 'SharingCapability'     = $SiteData.SharingCapability
-                'Last Content Modified' = $SiteData.LastContentModifiedDate
+                'Last Content Modified' = $documentLastModified #$SiteData.LastContentModifiedDate
                 'Search Status'         = $searchStatus
                 'Link Removed'          = $linkRemoved
             }
@@ -1749,10 +1750,11 @@ function Search-DocumentViaGraphAPI {
     )
 
     $result = @{
-        Found         = $false
-        DocumentUrl   = ''
-        DocumentOwner = ''
-        ItemType      = ''
+        Found                = $false
+        DocumentUrl          = ''
+        DocumentOwner        = ''
+        ItemType             = ''
+        DocumentLastModified = ''
     }
 
     try {
@@ -1832,6 +1834,10 @@ function Search-DocumentViaGraphAPI {
                     else {
                         $result.DocumentOwner = $ownerDisplayName
                     }
+                }
+
+                if ($resource.fileSystemInfo.lastModifiedDateTime) {
+                    $result.DocumentLastModified = $resource.fileSystemInfo.lastModifiedDateTime
                 }
 
                 Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Located document via Graph search (driveItem): $($result.DocumentUrl)"
@@ -2409,12 +2415,17 @@ foreach ($site in $sites) {
                                         if ($searchResult.ItemType) {
                                             $documentItemType = $searchResult.ItemType
                                         }
+
+                                        if ($searchResult.DocumentLastModified) {
+                                            $documentLastModified = $searchResult.DocumentLastModified
+                                        }
                                     }
                                     else {
                                         $searchStatus = 'Not Found in Search'
                                         # Set default values to indicate the file was not searchable
                                         $documentUrl = 'Not Searchable'
                                         $documentOwner = 'Not Searchable'
+                                        $documentLastModified = 'Not Searchable'
                                         $documentItemType = 'Not Searchable'
                                     }
                                 }
@@ -2423,6 +2434,7 @@ foreach ($site in $sites) {
                                     $searchStatus = 'Search Error'
                                     $documentUrl = 'Search Error'
                                     $documentOwner = 'Search Error'
+                                    $documentLastModified = 'Search Error'
                                     $documentItemType = 'Search Error'
                                 }
                             }
@@ -2431,6 +2443,7 @@ foreach ($site in $sites) {
                                 $searchStatus = 'Search Error'
                                 $documentUrl = 'Search Error'
                                 $documentOwner = 'Search Error'
+                                $documentLastModified = 'Search Error'
                                 $documentItemType = 'Search Error'
                             }
 
@@ -2441,15 +2454,16 @@ foreach ($site in $sites) {
                             }
 
                             $siteCollectionData[$siteUrl]['DocumentDetails'][$spGroupName] = @{
-                                'DocumentId'       = $documentId
-                                'SharingType'      = $sharingType
-                                'DocumentUrl'      = $documentUrl
-                                'DocumentOwner'    = $documentOwner
-                                'DocumentItemType' = $documentItemType
-                                'SearchStatus'     = $searchStatus
-                                'SharedOn'         = $siteUrl
-                                'SharingLinkUrl'   = '' # Will be populated when processing sharing links
-                                'ExpirationDate'   = '' # Will be populated when processing sharing links
+                                'DocumentId'           = $documentId
+                                'SharingType'          = $sharingType
+                                'DocumentUrl'          = $documentUrl
+                                'DocumentOwner'        = $documentOwner
+                                'DocumentLastModified' = $documentLastModified
+                                'DocumentItemType'     = $documentItemType
+                                'SearchStatus'         = $searchStatus
+                                'SharedOn'             = $siteUrl
+                                'SharingLinkUrl'       = '' # Will be populated when processing sharing links
+                                'ExpirationDate'       = '' # Will be populated when processing sharing links
                             }
 
                             Write-DebugLog -LogName $Log -LogEntryText "Stored sharing information for document ID $documentId with URL: $documentUrl and Owner: $documentOwner"
