@@ -2468,6 +2468,13 @@ foreach ($site in $sites) {
             # Initialize site data
             Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteProperties
 
+            $token = Get-PnPGraphTokenCompatible
+            $graphBeta = 'https://graph.microsoft.com/beta'
+            $rootsEndpoint = "$GraphBeta/sites?filter=siteCollection/root ne null&select=webUrl, siteCollection"
+            $SiteLocationData = Invoke-RestMethod -Uri $rootsEndpoint -Headers @{Authorization = "Bearer $token" } -Method GET
+            $SearchRegion = $SiteLocationData.value.siteCollection.dataLocationCode
+            Write-DebugLog -LogName $Log -LogEntryText "Determined site region: $SearchRegion"
+
             # Get all groups for this site
             $spGroups = Invoke-WithThrottleHandling -ScriptBlock {
                 Get-PnPGroup
