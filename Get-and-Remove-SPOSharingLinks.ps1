@@ -220,6 +220,7 @@ function Get-PnPGraphTokenCompatible {
     <#
     .SYNOPSIS
     Gets a Graph access token using the appropriate command based on PnP PowerShell version.
+    Performs the check once and then re-uses the value
 
     .DESCRIPTION
     Automatically detects PnP PowerShell version and uses:
@@ -227,6 +228,11 @@ function Get-PnPGraphTokenCompatible {
     - Get-PnPGraphAccessToken for PnP PowerShell 2.x and earlier
     #>
 
+    if ($Script:PnpGraphTokenCompatible) {
+        return & $Script:PnpGraphTokenCompatible
+    }
+
+    Write-DebugLog -LogName $Log -LogEntryText 'PnpGraphTokenCompatible not defined.'
     try {
         # Get the PnP PowerShell module version
         $pnpModule = Get-Module -Name 'PnP.PowerShell' -ListAvailable | Sort-Object Version -Descending | Select-Object -First 1
@@ -241,13 +247,14 @@ function Get-PnPGraphTokenCompatible {
         if ($majorVersion -ge 3) {
             # PnP PowerShell 3.0+ uses Get-PnPAccessToken
             Write-DebugLog -LogName $Log -LogEntryText 'Using Get-PnPAccessToken for PnP PowerShell 3.0+'
-            return Get-PnPAccessToken
+            $Script:PnpGraphTokenCompatible = [scriptblock]::Create({ Get-PnPAccessToken })
         }
         else {
             # PnP PowerShell 2.x and earlier uses Get-PnPGraphAccessToken
             Write-DebugLog -LogName $Log -LogEntryText 'Using Get-PnPGraphAccessToken for PnP PowerShell 2.x'
-            return Get-PnPGraphAccessToken
+            $Script:PnpGraphTokenCompatible = [scriptblock]::Create({ Get-PnPGraphAccessToken })
         }
+        return & $Script:PnpGraphTokenCompatible
     }
     catch {
         # Fallback: try the newer command first, then the older one
@@ -255,12 +262,13 @@ function Get-PnPGraphTokenCompatible {
 
         try {
             Write-DebugLog -LogName $Log -LogEntryText 'Fallback: Attempting Get-PnPAccessToken (PnP 3.0+)'
-            return Get-PnPAccessToken
+            $Script:PnpGraphTokenCompatible = [scriptblock]::Create({ Get-PnPAccessToken })
         }
         catch {
             Write-DebugLog -LogName $Log -LogEntryText 'Fallback: Attempting Get-PnPGraphAccessToken (PnP 2.x)'
-            return Get-PnPGraphAccessToken
+            $Script:PnpGraphTokenCompatible = [scriptblock]::Create({ Get-PnPGraphAccessToken })
         }
+        return & $Script:PnpGraphTokenCompatible
     }
 }
 
