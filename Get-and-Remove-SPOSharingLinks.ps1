@@ -8,7 +8,7 @@
     Flexible sharing links are detected and reported but never modified in remediation mode.
     The script supports scanning all sites in a tenant or a specific list of sites from a CSV file.
 
-.PARAMETER tenantname
+.PARAMETER tenantName
     The name of your Microsoft 365 tenant (without .onmicrosoft.com).
 
 .PARAMETER appID
@@ -17,29 +17,10 @@
 .PARAMETER thumbprint
     The certificate thumbprint for authentication.
 
-.PARAMETER tenant
+.PARAMETER tenantId
     The tenant ID (GUID) for your Microsoft 365 tenant.
 
-.PARAMETER searchRegion
-    The region for Microsoft Graph search operations (e.g., "NAM", "EUR").
-
-.PARAMETER Mode
-    Sets the script operation mode:
-    - "Detection": Only inventories sharing links without making any modifications (report mode)
-    - "Remediation": Converts Organization sharing links to direct permissions and removes Organization sharing groups (remediation mode). Flexible sharing links are not modified.
-    Default: "Detection"
-
-.PARAMETER cleanupCorruptedSharingGroups
-    When set to $true, the script attempts to clean up empty or corrupted Organization sharing groups.
-    When set to $false, no cleanup of sharing groups is performed.
-    Note: Flexible sharing groups are never affected by cleanup operations.
-    Note: This is automatically set to $true when Mode is set to "Remediation".
-
-.PARAMETER debugLogging
-    When set to $true, the script logs detailed DEBUG operations for troubleshooting.
-    When set to $false, only INFO and ERROR operations are logged.
-
-.PARAMETER inputfile
+.PARAMETER inputFile
     Optional. Path to a CSV file containing either:
     1. A simple list of SharePoint site URLs (one URL per line or with "URL" header)
     2. The output CSV from a previous run of this script in report mode
@@ -50,6 +31,39 @@
     - Skip other types of sharing links for focused remediation
 
     If not specified, the script will process all sites in the tenant.
+
+.PARAMETER Mode
+    Sets the script operation mode:
+    - "Detection": Only inventories sharing links without making any modifications (report mode)
+    - "Remediation": Converts Organization sharing links to direct permissions and removes Organization sharing groups (remediation mode). Flexible sharing links are not modified.
+    Default: "Detection"
+
+.PARAMETER ignoreFlexibleLinkGroups
+    When set to $true, the script will ignore groups where the Group Type is 'Flexible'
+    Flexible links are those which are direct sharing with another user.
+    Reduces discovery time when sharing is widely used.
+
+.PARAMETER removeAnyoneLinks
+    When set to $true, and Mode = 'Remediation', Anonymous/Anyone links will be removed.
+    No permissions for Anyone links are retained.
+
+.PARAMETER cleanupCorruptedSharingGroups
+    When set to $true, the script attempts to clean up empty or corrupted Organization sharing groups.
+    When set to $false, no cleanup of sharing groups is performed.
+    Note: Flexible sharing groups are never affected by cleanup operations.
+    Note: This is automatically set to $true when Mode is set to "Remediation".
+
+.PARAMETER logFilePath
+    Output log file path. Optional
+    Specify either the full path to a log file. If omitted then a log file will be created called 'SPO_SharingLinks_yyyyMMdd_HHmmss.log'
+
+.PARAMETER outputFilePath
+    Output results CSV path. Optional
+    Specify either the full path to a csv file. If omitted then a csv file will be created called 'SPO_SharingLinks_yyyyMMdd_HHmmss.csv'
+
+.PARAMETER debugLogging
+    When set to $true, the script logs detailed DEBUG operations for troubleshooting.
+    When set to $false, only INFO and ERROR operations are logged.
 
 .OUTPUTS
     - CSV file containing detailed information about sharing links found, including search status for each document
@@ -80,8 +94,20 @@
     - Link Removed: Whether the sharing link was removed (in remediation mode)
 
 .NOTES
-    Authors: Mike Lee
-    Updated: 8/29/2025
+    Author         : Mike Lee
+    Date Created   : 8/28/2025
+    Update History :
+        8/28/2025  - Initial script creation (Mike Lee)
+        8/29/2025  - Updates (Mike Lee)
+        12/29/2025 - Get-PnpGraphTokenCompatible caches discovery to reduce processing time (Craig Tolley)
+        12/29/2025 - Use ArrayLists for performance improvements (Craig Tolley)
+        12/29/2025 - Add in DocumentLastModified property to output (Craig Tolley)
+        12/29/2025 - Minimise reconnects to improve performance (Craig Tolley)
+        12/29/2025 - Update identification of Anonymous link types (Craig Tolley)
+        12/29/2025 - Add option to ignore Flexible groups to reduce discovery time (Craig Tolley)
+        12/29/2025 - Support removal of Anyone links (Craig Tolley)
+        12/29/2025 - Dynamically look up site region to support multi-geo tenants (Craig Tolley)
+        12/29/2025 - Move to parameters and update help (Craig Tolley)
 
     - Requires PnP.PowerShell 2.x or above
     - Requires an Entra app registration with appropriate SharePoint permissions
@@ -106,63 +132,94 @@
 
 .EXAMPLE
     # Process all sites, only inventory sharing links without modifications (report mode)
-    .\Get-and-Remove-SPOSharingLinks.ps1
-
-.EXAMPLE
-    # Process sites from a simple CSV file with URLs and convert Organization links to direct permissions
-    $tenantname = "m365x61250205"
-    $appID = "12345678-1234-1234-1234-1234567890ab"
-    $thumbprint = "1234567890ABCDEF1234567890ABCDEF12345678"
-    $tenant = "12345678-1234-1234-1234-1234567890ab"
-    $inputfile = $null
-    $Mode = "Detection"
-    # Note: $cleanupCorruptedSharingGroups will automatically be set to $true in remediation mode
-    .\Get-and-Remove-SPOSharingLinks.ps1
+    . .\Get-and-Remove-SPOSharingLinks.ps1 -tenantName m365cpi13246019 -appId abc64618-283f-47ba-a185-50d935d51d57 -thumbprint B696FDCFE1453F3FBC6031F54DE988DA0ED905A9 -tenantId 9cfc42cb-51da-4055-87e9-b20a170b6ba3
 
 .EXAMPLE
     # Two-step process: Report then Remediate
     # Step 1: Run in report mode to generate CSV output
-    $Mode = "Detection"
-    .\Get-and-Remove-SPOSharingLinks.ps1
+    . .\Get-and-Remove-SPOSharingLinks.ps1 -tenantName m365cpi13246019 -appId abc64618-283f-47ba-a185-50d935d51d57 -thumbprint B696FDCFE1453F3FBC6031F54DE988DA0ED905A9 -tenantId 9cfc42cb-51da-4055-87e9-b20a170b6ba3
 
     # Step 2: Use the generated CSV to remediate only Organization links
-    $inputfile = "C:\temp\SPO_SharingLinks_2025-07-01_14-30-15.csv"
+    $inputFile = ".\SPO_SharingLinks_2025-07-01_14-30-15.csv"
     # Note: Mode will be automatically set to "Remediation" when using script's CSV output
-    .\Get-and-Remove-SPOSharingLinks.ps1
+    . .\Get-and-Remove-SPOSharingLinks.ps1 -inputFile $inputFile -tenantName m365cpi13246019 -appId abc64618-283f-47ba-a185-50d935d51d57 -thumbprint B696FDCFE1453F3FBC6031F54DE988DA0ED905A9 -tenantId 9cfc42cb-51da-4055-87e9-b20a170b6ba3
 
 .EXAMPLE
     # Process all sites and convert Organization links to direct permissions
-    $Mode = "Remediation"
-    .\Get-and-Remove-SPOSharingLinks.ps1
+    . .\Get-and-Remove-SPOSharingLinks.ps1 -mode Remediation -tenantName m365cpi13246019 -appId abc64618-283f-47ba-a185-50d935d51d57 -thumbprint B696FDCFE1453F3FBC6031F54DE988DA0ED905A9 -tenantId 9cfc42cb-51da-4055-87e9-b20a170b6ba3
+
+.EXAMPLE
+    # Process all sites and convert Organization links to direct permissions, and remove Anyone links
+    . .\Get-and-Remove-SPOSharingLinks.ps1 -mode Remediation -removeAnyoneLinks $true -tenantName m365cpi13246019 -appId abc64618-283f-47ba-a185-50d935d51d57 -thumbprint B696FDCFE1453F3FBC6031F54DE988DA0ED905A9 -tenantId 9cfc42cb-51da-4055-87e9-b20a170b6ba3
 #>
 
 # ----------------------------------------------
 # Set Variables
 # ----------------------------------------------
-$tenantname = 'm365cpi13246019'                                   # This is your tenant name
-$appID = 'abc64618-283f-47ba-a185-50d935d51d57'                 # This is your Entra App ID
-$thumbprint = 'B696FDCFE1453F3FBC6031F54DE988DA0ED905A9'        # This is certificate thumbprint
-$tenant = '9cfc42cb-51da-4055-87e9-b20a170b6ba3'                # This is your Tenant ID
-$searchRegion = 'NAM'                                           # Region for Microsoft Graph search
-$Mode = 'Detection'                                             # Set to "Detection" for report mode, "Remediation" to convert Organization sharing links to direct permissions
-$debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
+param (
+    # Tenant Name for your tenant
+    [Parameter(Mandatory = $true)]
+    [string]$tenantName,
 
+    # Entra App ID for authentication
+    [Parameter(Mandatory = $true)]
+    [string]$appId,
+
+    # Certificate thumbprint for authentication
+    [Parameter(Mandatory = $true)]
+    [string]$thumbprint,
+
+    # Tenant ID for your tenant
+    [Parameter(Mandatory = $true)]
+    [string]$tenantId,
+
+    # Path to the input file containing site URLs to scan
+    [Parameter(Mandatory = $true)]
+    [string]$inputFile,
+
+    # Set to "Detection" for report mode, "Remediation" to convert Organization sharing links to direct permissions
+    [ValidateSet('Detection', 'Remediation')]
+    [string]$Mode = 'Detection',
+
+    # If set to 'true', then Flexible Link Groups are not expanded and shown in the output.
+    # Reduces discovery time, but direct sharing links are not presented
+    [bool]$ignoreFlexibleLinkGroups = $true,
+
+    # If set to 'true' then Anyone/Anonymous sharing links will be removed.
+    # Only works if $Mode = 'Remediation'
+    [bool]$removeAnyoneLinks = $false,
+
+    # Path to save the output log file
+    # If not specified then it will saved as 'SPO_SharingLinks_yyyyMMdd_HHmmss.txt'
+    $logFilePath,
+
+    # Path to save the output CSV file
+    # If not specified then it will saved as 'SPO_SharingLinks_yyyyMMdd_HHmmss.txt'
+    $outputFilePath,
+
+    # Set to $true for verbose logging, $false for essential logging only
+    # Default is false
+    [switch]$debugLogging
+)
 # ----------------------------------------------
 # Initialize Parameters - Do not change
 # ----------------------------------------------
 $sites = @()
-$inputfile = $null
 $log = $null
-$date = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
-$ignoreFlexibleLinkGroups = $true
 
 # ----------------------------------------------
 # Input / Output and Log Files
 # ----------------------------------------------
-$inputfile = '' #If no input file specified, will process all sites in the tenant
-$log = "$env:TEMP\" + 'SPOSharingLinks' + $date + '_' + 'logfile.log'
-# Initialize sharing links output file
-$sharingLinksOutputFile = "$env:TEMP\" + 'SPO_SharingLinks_' + $date + '.csv'
+$startime = Get-Date -Format 'yyyyMMdd_HHmmss'
+if ([String]::IsNullOrEmpty($logFilePath)) {
+    $logFilePath = ".\SPO_SharingLinks_$($startime).log"
+}
+
+if ([String]::IsNullOrEmpty($outputFilePath)) {
+    $outputFilePath = ".\SPO_SharingLinks_$($startime).csv"
+}
+New-Item $logFilePath -ItemType File -ErrorAction Stop
+New-Item $outputFilePath -ItemType File -ErrorAction Stop
 
 # ----------------------------------------------
 # Logging Function
@@ -179,7 +236,7 @@ function Write-LogEntry {
     if ($Level -eq 'ERROR' -or $Level -eq 'INFO' -or ($Level -eq 'DEBUG' -and $debugLogging)) {
         if ($null -ne $LogName) {
             # log the date and time in the text file along with the data passed
-            "$([DateTime]::Now.ToShortDateString()) $([DateTime]::Now.ToShortTimeString()) [$Level] : $LogEntryText" | Out-File -FilePath $LogName -Append
+            "$([DateTime]::Now.ToShortDateString()) $([string]([DateTime]::Now.TimeOfDay)) [$Level] : $LogEntryText" | Out-File -FilePath $LogName -Append
         }
     }
 }
@@ -313,7 +370,7 @@ Write-InfoLog -LogName $Log -LogEntryText "Script is running in $scriptMode mode
 $connectionParams = @{
     ClientId      = $appID
     Thumbprint    = $thumbprint
-    Tenant        = $tenant
+    Tenant        = $tenantId
     WarningAction = 'SilentlyContinue'
 }
 
@@ -431,13 +488,13 @@ catch {
 # ----------------------------------------------
 # Get Site List
 # ----------------------------------------------
-if ($inputfile -and (Test-Path -Path $inputfile)) {
-    Write-Host "Processing input file: $inputfile" -ForegroundColor Yellow
-    Write-InfoLog -LogName $Log -LogEntryText "Processing input file: $inputfile"
+if ($inputFile -and (Test-Path -Path $inputFile)) {
+    Write-Host "Processing input file: $inputFile" -ForegroundColor Yellow
+    Write-InfoLog -LogName $Log -LogEntryText "Processing input file: $inputFile"
 
     try {
         # Check if this is the script's CSV output format or a simple URL list
-        $firstLine = Get-Content -Path $inputfile -TotalCount 1
+        $firstLine = Get-Content -Path $inputFile -TotalCount 1
 
         if ($firstLine -and $firstLine.Contains('Sharing Group Name')) {
             # This is the script's CSV output format
@@ -445,7 +502,7 @@ if ($inputfile -and (Test-Path -Path $inputfile)) {
             Write-InfoLog -LogName $Log -LogEntryText "Input file detected as script's CSV output format"
 
             # Import the full CSV and filter for Organization sharing links only
-            $csvData = Import-Csv -Path $inputfile
+            $csvData = Import-Csv -Path $inputFile
             $organizationEntries = $csvData | Where-Object {
                 $_.'Sharing Group Name' -like '*Organization*' -and
                 -not [string]::IsNullOrWhiteSpace($_.'Site URL')
@@ -483,12 +540,12 @@ if ($inputfile -and (Test-Path -Path $inputfile)) {
             # This is a simple site URL list
             Write-Host 'Input file appears to be a simple site URL list' -ForegroundColor Yellow
             Write-InfoLog -LogName $Log -LogEntryText 'Input file detected as simple site URL list'
-            $sites = Import-Csv -Path $inputfile -Header 'URL'
+            $sites = Import-Csv -Path $inputFile -Header 'URL'
         }
     }
     catch {
-        Write-Host "Error reading input file '$inputfile': $_" -ForegroundColor Red
-        Write-ErrorLog -LogName $Log -LogEntryText "Error reading input file '$inputfile': $_"
+        Write-Host "Error reading input file '$inputFile': $_" -ForegroundColor Red
+        Write-ErrorLog -LogName $Log -LogEntryText "Error reading input file '$inputFile': $_"
         exit
     }
 }
@@ -1280,7 +1337,7 @@ function Remove-AnyoneSharingLinks {
         }
 
         # Get a list of the site and subsite URLs.
-        # This is used to find the link in the appropriate site to increase the chance of a successful removial using PnP Methods
+        # This is used to find the link in the appropriate site to increase the chance of a successful removal using PnP Methods
         # As Get-PnpFile only works if you are connected to the right site.
         Write-DebugLog -LogName $Log -LogEntryText 'Retrieving Site and Subsite URLs'
         $subsites = Get-PnPSubWeb -Recurse | Select-Object Title, Url
@@ -2411,6 +2468,7 @@ if ($convertOrganizationLinks) {
 else {
     Write-Host '  - Only DETECTING and INVENTORYING sharing links' -ForegroundColor Cyan
     Write-Host '  - NO modifications will be made to permissions or sharing links' -ForegroundColor Cyan
+    Write-Host "  - Results will be saved to: $sharingLinksOutputFile" -ForegroundColor Cyan
     if ($ignoreFlexibleLinkGroups) {
         Write-Host '  - Flexible link groups and links will NOT be included in the output' -ForegroundColor Cyan
     }
