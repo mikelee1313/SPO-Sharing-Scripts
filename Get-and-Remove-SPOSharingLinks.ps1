@@ -810,7 +810,10 @@ function Convert-OrganizationSharingLinks {
 
     try {
         # Connect to the specific site
-        Connect-PnPOnline -Url $SiteUrl @connectionParams -ErrorAction Stop
+        $currentConnection = Get-PnPConnection -ErrorAction SilentlyContinue
+        if (-not $currentConnection -or $currentConnection.Url -ne $SiteUrl) {
+            Connect-PnPOnline -Url $SiteUrl @connectionParams -ErrorAction Stop
+        }
 
         # Get all SharePoint groups that contain "Organization" in the name
         $organizationGroups = Invoke-WithThrottleHandling -ScriptBlock {
@@ -2246,16 +2249,20 @@ foreach ($site in $sites) {
     try {
         # Connect to the specific site to get groups and users
         try {
-            Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
-
             # Get Site Properties using SharePoint Admin connection
-            Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop
+            $currentConnection = Get-PnPConnection -ErrorAction SilentlyContinue
+            if (-not $currentConnection -or $currentConnection.Url -ne $adminUrl) {
+                Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop
+            }
             $siteProperties = Invoke-WithThrottleHandling -ScriptBlock {
                 Get-PnPTenantSite -Identity $siteUrl
             } -Operation "Get site properties for $siteUrl"
 
             # Connect back to the site for group processing
-            Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
+            $currentConnection = Get-PnPConnection -ErrorAction SilentlyContinue
+            if (-not $currentConnection -or $currentConnection.Url -ne $SiteUrl) {
+                Connect-PnPOnline -Url $SiteUrl @connectionParams -ErrorAction Stop
+            }
 
             # Initialize site data
             Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteProperties
