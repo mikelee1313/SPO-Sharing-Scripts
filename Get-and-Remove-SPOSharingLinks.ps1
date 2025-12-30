@@ -154,6 +154,7 @@ $sites = @()
 $inputfile = $null
 $log = $null
 $date = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
+$ignoreFlexibleLinkGroups = $true
 
 # ----------------------------------------------
 # Input / Output and Log Files
@@ -1931,7 +1932,9 @@ function Search-DocumentViaGraphAPI {
 function Get-SharingLinkUrls {
     param(
         [Parameter(Mandatory = $true)]
-        [string] $SiteUrl
+        [string] $SiteUrl,
+
+        [bool]$IgnoreFlexibleLinkGroups = $false
     )
 
     Write-Host "  Collecting sharing link URLs for site: $SiteUrl" -ForegroundColor Cyan
@@ -1956,6 +1959,12 @@ function Get-SharingLinkUrls {
 
         Write-Host "    Found $($sharingGroups.Count) sharing groups" -ForegroundColor Green
         Write-InfoLog -LogName $Log -LogEntryText "Found $($sharingGroups.Count) sharing groups on site: $SiteUrl"
+
+        if ($ignoreFlexibleLinkGroups) {
+            $sharingGroups = $sharingGroups | Where-Object { $_.Title -notlike '*Flexible*' }
+            Write-Host "    Found $($sharingGroups.Count) sharing groups which are not 'Flexible'" -ForegroundColor Green
+            Write-InfoLog -LogName $Log -LogEntryText "Found $($sharingGroups.Count) sharing groups on site which are not 'Flexible': $SiteUrl"
+        }
 
         foreach ($group in $sharingGroups) {
             $groupName = $group.Title
@@ -2212,7 +2221,9 @@ if ($convertOrganizationLinks) {
 else {
     Write-Host '  - Only DETECTING and INVENTORYING sharing links' -ForegroundColor Cyan
     Write-Host '  - NO modifications will be made to permissions or sharing links' -ForegroundColor Cyan
-    Write-Host "  - Results will be saved to: $sharingLinksOutputFile" -ForegroundColor Cyan
+    if ($ignoreFlexibleLinkGroups) {
+        Write-Host '  - Flexible link groups and links will NOT be included in the output' -ForegroundColor Cyan
+    }
 }
 Write-Host '======================================================' -ForegroundColor $(if ($convertOrganizationLinks) {
         'Yellow'
@@ -2271,6 +2282,12 @@ foreach ($site in $sites) {
             $spGroups = Invoke-WithThrottleHandling -ScriptBlock {
                 Get-PnPGroup
             } -Operation "Get groups for site $siteUrl"
+
+            if ($ignoreFlexibleLinkGroups) {
+                $spGroups = $spGroups | Where-Object { $_.Title -notlike '*Flexible*' }
+                Write-Host " Found $($spGroups.Count) groups on the site which are not 'Flexible'" -ForegroundColor Green
+                Write-InfoLog -LogName $Log -LogEntryText "Found $($spGroups.Count) groups on site which are not 'Flexible': $SiteUrl"
+            }
 
             foreach ($spGroup in $spGroups) {
                 $spGroupName = $spGroup.Title
@@ -2490,7 +2507,7 @@ foreach ($site in $sites) {
                 $sitesWithSharingLinksCount++
 
                 # Collect sharing link URLs for all sites, whether in detection or remediation mode
-                Get-SharingLinkUrls -SiteUrl $siteUrl
+                Get-SharingLinkUrls -SiteUrl $siteUrl -IgnoreFlexibleLinkGroups $ignoreFlexibleLinkGroups
 
                 # Convert Organization sharing links to direct permissions if enabled
                 if ($convertOrganizationLinks) {
