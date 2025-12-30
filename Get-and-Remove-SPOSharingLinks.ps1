@@ -1684,27 +1684,27 @@ function Test-AndParseScriptCsvOutput {
             $siteGroups = $organizationEntries | Group-Object 'Site URL'
 
             # Create sites collection for processing
-            $sitesToProcess = @()
+            $sitesToProcess = [System.Collections.ArrayList]::new()
             $orgLinksData = @{
             }
 
             foreach ($siteGroup in $siteGroups) {
                 $siteUrl = $siteGroup.Name
-                $sitesToProcess += [PSCustomObject]@{ URL = $siteUrl }
+                $sitesToProcess.Add([PSCustomObject]@{ URL = $siteUrl }) | Out-Null
 
                 # Store Organization sharing group details for this site
                 $orgLinksData[$siteUrl] = @{
-                    Groups               = @()
+                    Groups               = [System.Collections.ArrayList]::new()
                     HasOrganizationLinks = $true
                 }
 
                 foreach ($entry in $siteGroup.Group) {
-                    $orgLinksData[$siteUrl].Groups += @{
-                        GroupName = $entry.'Sharing Group Name'
-                        Members   = $entry.'Sharing Link Members'
-                        FileUrl   = $entry.'File URL'
-                        FileOwner = $entry.'File Owner'
-                    }
+                    $orgLinksData[$siteUrl].Groups.Add(@{
+                            GroupName = $entry.'Sharing Group Name'
+                            Members   = $entry.'Sharing Link Members'
+                            FileUrl   = $entry.'File URL'
+                            FileOwner = $entry.'File Owner'
+                        }) | Out-Null
                 }
             }
 
@@ -2281,15 +2281,15 @@ foreach ($site in $sites) {
                             $ctx.ExecuteQuery()
 
                             # Convert CSOM users to PnP format for consistency
-                            $csomUsers = @()
+                            $csomUsers = [System.Collections.ArrayList]::new()
                             foreach ($user in $users) {
-                                $csomUsers += [PSCustomObject]@{
-                                    Id            = $user.Id
-                                    LoginName     = $user.LoginName
-                                    Title         = $user.Title
-                                    Email         = $user.Email
-                                    PrincipalType = $user.PrincipalType
-                                }
+                                $csomUsers.Add([PSCustomObject]@{
+                                        Id            = $user.Id
+                                        LoginName     = $user.LoginName
+                                        Title         = $user.Title
+                                        Email         = $user.Email
+                                        PrincipalType = $user.PrincipalType
+                                    })
                             }
 
                             # Combine standard and CSOM results, removing duplicates by LoginName
