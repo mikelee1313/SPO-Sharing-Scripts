@@ -218,8 +218,10 @@ if ([String]::IsNullOrEmpty($logFilePath)) {
 if ([String]::IsNullOrEmpty($outputFilePath)) {
     $outputFilePath = ".\SPO_SharingLinks_$($startime).csv"
 }
-New-Item $logFilePath -ItemType File -ErrorAction Stop
-New-Item $outputFilePath -ItemType File -ErrorAction Stop
+$Log = [System.IO.Path]::GetFullPath($logFilePath)
+New-Item $Log -ItemType File -ErrorAction Stop
+$sharingLinksOutputFile = [System.IO.Path]::GetFullPath($outputFilePath)
+New-Item $sharingLinksOutputFile -ItemType File -ErrorAction Stop
 
 # ----------------------------------------------
 # Logging Function
