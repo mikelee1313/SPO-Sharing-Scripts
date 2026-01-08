@@ -149,6 +149,7 @@ $admin = 'admin@M365CPI13246019.onmicrosoft.com'  # <- Your Admin Account Here
 $users = Get-Content 'C:\temp\users.txt'
 
 # Optional Feature Settings
+$IncludeOneDrive = $true  # Set to $true to include OneDrive sites in the search, $false to exclude them
 $checkEEEU = $true  # Set to $true to check for "Everyone except external users" permissions, $false to skip
 $debug = $false  # Set to $true for detailed debug output, $false for minimal output
 
@@ -452,13 +453,25 @@ $outputfile = "$env:TEMP\" + 'SiteUsers_' + $date + "output.csv"
 $log = "$env:TEMP\" + 'SiteUsers_' + $date + '_' + "logfile.log"
 
 #Get All Sites that are not Group Connected and exclude system/service sites
-$sites = Get-PnPTenantSite -includeOneDriveSites | Where-Object {
-    $_.Template -ne 'RedirectSite#0' -and
-    $_.Template -notlike 'SRCHCEN*' -and
-    $_.Template -notlike 'SRCHCENTERLITE*' -and
-    $_.Template -notlike 'SPSMSITEHOST*' -and
-    $_.Template -notlike 'APPCATALOG*' -and
-    $_.Template -notlike 'REDIRECTSITE*'
+if ($IncludeOneDrive) {
+    $sites = Get-PnPTenantSite -includeOneDriveSites | Where-Object {
+        $_.Template -ne 'RedirectSite#0' -and
+        $_.Template -notlike 'SRCHCEN*' -and
+        $_.Template -notlike 'SRCHCENTERLITE*' -and
+        $_.Template -notlike 'SPSMSITEHOST*' -and
+        $_.Template -notlike 'APPCATALOG*' -and
+        $_.Template -notlike 'REDIRECTSITE*'
+    }
+}
+else {
+    $sites = Get-PnPTenantSite | Where-Object {
+        $_.Template -ne 'RedirectSite#0' -and
+        $_.Template -notlike 'SRCHCEN*' -and
+        $_.Template -notlike 'SRCHCENTERLITE*' -and
+        $_.Template -notlike 'SPSMSITEHOST*' -and
+        $_.Template -notlike 'APPCATALOG*' -and
+        $_.Template -notlike 'REDIRECTSITE*'
+    }
 }
 
 # =================================================================================================
