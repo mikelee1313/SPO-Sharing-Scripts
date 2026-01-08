@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    SharePoint Online Site Access Auditor - Checks user access across all SharePoint sites in a tenant.
+    SharePoint Online Site Access Auditor - Checks user access across all SharePoint and OneDrive sites in a tenant.
 
 .DESCRIPTION
     This script audits SharePoint Online sites to determine if specified users have access to each site.
