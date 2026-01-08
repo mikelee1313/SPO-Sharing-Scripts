@@ -1344,7 +1344,8 @@ function Remove-AnyoneSharingLinks {
         # This is used to find the link in the appropriate site to increase the chance of a successful removal using PnP Methods
         # As Get-PnpFile only works if you are connected to the right site.
         Write-DebugLog -LogName $Log -LogEntryText 'Retrieving Site and Subsite URLs'
-        $subsites = Get-PnPSubWeb -Recurse | Select-Object Title, Url
+        $subsites = @()
+        $subsites += Get-PnPSubWeb -Recurse | Select-Object Title, Url
         $subsites += Get-PnPWeb -Includes Title, Url | Select-Object Title, Url
 
         foreach ($anonGroup in $anonymousGroups) {
