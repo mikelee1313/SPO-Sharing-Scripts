@@ -452,7 +452,7 @@ $outputfile = "$env:TEMP\" + 'SiteUsers_' + $date + "output.csv"
 $log = "$env:TEMP\" + 'SiteUsers_' + $date + '_' + "logfile.log"
 
 #Get All Sites that are not Group Connected and exclude system/service sites
-$sites = Get-PnPTenantSite | Where-Object {
+$sites = Get-PnPTenantSite -includeOneDriveSites | Where-Object {
     $_.Template -ne 'RedirectSite#0' -and
     $_.Template -notlike 'SRCHCEN*' -and
     $_.Template -notlike 'SRCHCENTERLITE*' -and
