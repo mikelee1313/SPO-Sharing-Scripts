@@ -149,8 +149,9 @@ $admin = 'admin@M365CPI13246019.onmicrosoft.com'  # <- Your Admin Account Here
 $users = Get-Content 'C:\temp\users.txt'
 
 # Optional Feature Settings
-$IncludeOneDrive = $true  # Set to $true to include OneDrive sites in the search, $false to exclude them
-$checkEEEU = $true  # Set to $true to check for "Everyone except external users" permissions, $false to skip
+$TargetSiteUrl = ""  # Leave empty to process all sites, or specify a single site URL (e.g., "https://contoso.sharepoint.com/sites/sitename")
+$IncludeOneDrive = $false  # Set to $true to include OneDrive sites in the search, $false to exclude them
+$checkEEEU = $false  # Set to $true to check for "Everyone except external users" permissions, $false to skip
 $debug = $false  # Set to $true for detailed debug output, $false for minimal output
 
 # Throttling Protection Settings
@@ -452,26 +453,50 @@ $firstWrite = $true
 $outputfile = "$env:TEMP\" + 'SiteUsers_' + $date + "output.csv"
 $log = "$env:TEMP\" + 'SiteUsers_' + $date + '_' + "logfile.log"
 
-#Get All Sites that are not Group Connected and exclude system/service sites
-if ($IncludeOneDrive) {
-    $sites = Get-PnPTenantSite -includeOneDriveSites | Where-Object {
-        $_.Template -ne 'RedirectSite#0' -and
-        $_.Template -notlike 'SRCHCEN*' -and
-        $_.Template -notlike 'SRCHCENTERLITE*' -and
-        $_.Template -notlike 'SPSMSITEHOST*' -and
-        $_.Template -notlike 'APPCATALOG*' -and
-        $_.Template -notlike 'REDIRECTSITE*'
+#Get Sites - either a single targeted site or all sites
+if ($TargetSiteUrl -and $TargetSiteUrl -ne "") {
+    # Target a specific site collection
+    Write-StatusMessage "Targeting single site: $TargetSiteUrl" -ForegroundColor Cyan
+    Write-LogEntry -LogName:$log -LogEntryText "Targeting single site: $TargetSiteUrl"
+    
+    try {
+        $sites = @(Get-PnPTenantSite -Url $TargetSiteUrl -ErrorAction Stop)
+        Write-StatusMessage "Successfully retrieved target site: $($sites[0].Title)" -ForegroundColor Green
+    }
+    catch {
+        Write-StatusMessage "Failed to retrieve target site '$TargetSiteUrl': $($_.Exception.Message)" -ForegroundColor Red
+        Write-LogEntry -LogName:$log -LogEntryText "Failed to retrieve target site '$TargetSiteUrl': $($_.Exception.Message)"
+        exit
     }
 }
 else {
-    $sites = Get-PnPTenantSite | Where-Object {
-        $_.Template -ne 'RedirectSite#0' -and
-        $_.Template -notlike 'SRCHCEN*' -and
-        $_.Template -notlike 'SRCHCENTERLITE*' -and
-        $_.Template -notlike 'SPSMSITEHOST*' -and
-        $_.Template -notlike 'APPCATALOG*' -and
-        $_.Template -notlike 'REDIRECTSITE*'
+    # Get All Sites that are not Group Connected and exclude system/service sites
+    Write-StatusMessage "Retrieving all sites from tenant..." -ForegroundColor Cyan
+    Write-LogEntry -LogName:$log -LogEntryText "Retrieving all sites from tenant..."
+    
+    if ($IncludeOneDrive) {
+        $sites = Get-PnPTenantSite -includeOneDriveSites | Where-Object {
+            $_.Template -ne 'RedirectSite#0' -and
+            $_.Template -notlike 'SRCHCEN*' -and
+            $_.Template -notlike 'SRCHCENTERLITE*' -and
+            $_.Template -notlike 'SPSMSITEHOST*' -and
+            $_.Template -notlike 'APPCATALOG*' -and
+            $_.Template -notlike 'REDIRECTSITE*'
+        }
     }
+    else {
+        $sites = Get-PnPTenantSite | Where-Object {
+            $_.Template -ne 'RedirectSite#0' -and
+            $_.Template -notlike 'SRCHCEN*' -and
+            $_.Template -notlike 'SRCHCENTERLITE*' -and
+            $_.Template -notlike 'SPSMSITEHOST*' -and
+            $_.Template -notlike 'APPCATALOG*' -and
+            $_.Template -notlike 'REDIRECTSITE*'
+        }
+    }
+    
+    Write-StatusMessage "Retrieved $($sites.Count) sites to process" -ForegroundColor Green
+    Write-LogEntry -LogName:$log -LogEntryText "Retrieved $($sites.Count) sites to process"
 }
 
 # =================================================================================================
@@ -510,15 +535,80 @@ foreach ($site in $sites) {
             $accessType = ""
             $groupMemberships = @()
             
-            # Check 1: Direct user access
-            $SiteMember = Invoke-PnPCommandWithThrottling -Command {
-                Get-PnPUser -Identity $user -ErrorAction SilentlyContinue
-            } -OperationDescription "Get user $user from site"
-            
-            if ($SiteMember) {
-                $userFound = $true
-                $accessType = "Direct Access"
-                Write-DebugInfo "Found $user with direct access on '$($site.url)'" -ForegroundColor Cyan
+            # Check 1: Direct user access with actual permissions
+            # Get users with actual rights assigned (not just in User Information List)
+            try {
+                $usersWithRights = Invoke-PnPCommandWithThrottling -Command {
+                    Get-PnPUser -WithRightsAssigned -ErrorAction SilentlyContinue
+                } -OperationDescription "Get users with rights assigned"
+                
+                # Check if our target user is in the list of users with actual permissions
+                $userWithPermissions = $usersWithRights | Where-Object {
+                    $_.LoginName -eq $user -or 
+                    $_.Email -eq $user -or 
+                    $_.UserPrincipalName -eq $user -or
+                    $_.LoginName -like "*$user*"
+                }
+                
+                if ($userWithPermissions) {
+                    # Get the user's permission levels
+                    try {
+                        $web = Invoke-PnPCommandWithThrottling -Command {
+                            Get-PnPWeb -ErrorAction SilentlyContinue
+                        } -OperationDescription "Get web for role assignments"
+                        
+                        $roleAssignments = Invoke-PnPCommandWithThrottling -Command {
+                            Get-PnPProperty -ClientObject $web -Property RoleAssignments -ErrorAction SilentlyContinue
+                        } -OperationDescription "Get role assignments to determine permission levels"
+                        
+                        $userPermissionLevels = @()
+                        foreach ($roleAssignment in $roleAssignments) {
+                            # Load the Member and RoleDefinitionBindings properties
+                            Invoke-PnPCommandWithThrottling -Command {
+                                Get-PnPProperty -ClientObject $roleAssignment -Property Member, RoleDefinitionBindings -ErrorAction SilentlyContinue
+                            } -OperationDescription "Load role assignment properties" | Out-Null
+                            
+                            # Only check DIRECT user assignments (PrincipalType = User), not SharePoint groups
+                            # SharePoint groups are handled separately in Check 4
+                            if (($roleAssignment.Member.LoginName -eq $userWithPermissions.LoginName -or 
+                                    $roleAssignment.Member.Email -eq $userWithPermissions.Email -or
+                                    $roleAssignment.Member.UserPrincipalName -eq $userWithPermissions.UserPrincipalName) -and
+                                $roleAssignment.Member.PrincipalType -eq "User") {
+                                foreach ($roleDef in $roleAssignment.RoleDefinitionBindings) {
+                                    if ($roleDef.Name -ne "Limited Access") {
+                                        $userPermissionLevels += $roleDef.Name
+                                        Write-DebugInfo "  Found direct permission: $($roleDef.Name)" -ForegroundColor DarkCyan
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if ($userPermissionLevels.Count -gt 0) {
+                            $permissionsList = ($userPermissionLevels | Select-Object -Unique) -join ", "
+                            $accessType = "Direct Access: $permissionsList"
+                            $userFound = $true
+                            Write-DebugInfo "Found $user with direct access ($permissionsList) on '$($site.url)'" -ForegroundColor Cyan
+                        }
+                        else {
+                            # Fallback if we can't get specific permissions
+                            $userFound = $true
+                            $accessType = "Direct Access"
+                            Write-DebugInfo "Found $user with direct access (permission level unknown) on '$($site.url)'" -ForegroundColor Cyan
+                        }
+                    }
+                    catch {
+                        # Fallback if we can't get permission levels
+                        $userFound = $true
+                        $accessType = "Direct Access"
+                        Write-DebugInfo "Found $user with direct access (could not determine permission level) on '$($site.url)'" -ForegroundColor Cyan
+                    }
+                }
+                else {
+                    Write-DebugInfo "User not found in users with rights assigned" -ForegroundColor DarkGray
+                }
+            }
+            catch {
+                Write-DebugInfo "Could not check users with rights assigned: $($_.Exception.Message)" -ForegroundColor DarkGray
             }
             
             # Check 1.5: Microsoft 365 Group-connected site membership
@@ -724,12 +814,36 @@ foreach ($site in $sites) {
                 } -OperationDescription "Get site users for Entra ID group check"
                 
                 if ($siteUsers) {
+                    # Get list of users with actual rights for verification
+                    $usersWithRights = Invoke-PnPCommandWithThrottling -Command {
+                        Get-PnPUser -WithRightsAssigned -ErrorAction SilentlyContinue
+                    } -OperationDescription "Get users with rights for verification"
+                    
                     foreach ($siteUser in $siteUsers) {
-                        # Check for direct user assignment
+                        # Check for direct user assignment - but verify they have actual permissions
                         if ($siteUser.LoginName -eq $user -or $siteUser.Email -eq $user -or $siteUser.UserPrincipalName -eq $user) {
-                            $userFound = $true
-                            $accessType += "; Direct User Assignment"
-                            Write-DebugInfo "Found $user with direct user assignment on '$($site.url)'" -ForegroundColor Cyan
+                            Write-DebugInfo "Found user in site users list. Verifying actual permissions..." -ForegroundColor Yellow
+                            Write-DebugInfo "  User LoginName: $($siteUser.LoginName)" -ForegroundColor DarkGray
+                            Write-DebugInfo "  User Email: $($siteUser.Email)" -ForegroundColor DarkGray
+                            Write-DebugInfo "  Total users with rights: $($usersWithRights.Count)" -ForegroundColor DarkGray
+                            
+                            # Verify this user is in the list of users with actual rights
+                            # Match by Email or UserPrincipalName (more reliable than LoginName claim format)
+                            $hasActualRights = $usersWithRights | Where-Object {
+                                ($_.Email -and $_.Email -eq $siteUser.Email) -or 
+                                ($_.UserPrincipalName -and $_.UserPrincipalName -eq $siteUser.UserPrincipalName) -or
+                                ($_.Email -and $_.Email -eq $user) -or
+                                ($_.UserPrincipalName -and $_.UserPrincipalName -eq $user)
+                            }
+                            
+                            if ($hasActualRights) {
+                                # Skip - already detected in Check 1 with permission levels
+                                # This prevents duplicate reporting
+                                Write-DebugInfo "User already detected in Check 1, skipping duplicate" -ForegroundColor DarkGray
+                            }
+                            else {
+                                Write-DebugInfo "✗ User found in site users but has no effective permissions" -ForegroundColor DarkGray
+                            }
                         }
                         
                         # Check if this is an Entra ID group (PrincipalType = SecurityGroup)
@@ -738,29 +852,80 @@ foreach ($site in $sites) {
                                 # Get Entra ID group information
                                 $groupLoginName = $siteUser.LoginName
                                 $groupTitle = $siteUser.Title
+                                $groupId = $null
                                 
-                                # Extract group ID from LoginName if it's an Entra ID group
+                                # Extract group ID from LoginName - handle multiple claim formats
                                 if ($groupLoginName -like "c:0t.c|tenant|*") {
+                                    # Standard Entra ID group format: c:0t.c|tenant|guid
                                     $groupId = $groupLoginName -replace "c:0t.c\|tenant\|", ""
-                                    
+                                    Write-DebugInfo "Found Entra ID group (tenant claim): '$groupTitle' (ID: $groupId)" -ForegroundColor Yellow
+                                }
+                                elseif ($groupLoginName -like "c:0o.c|federateddirectoryclaimprovider|*") {
+                                    # Federated directory claim format: c:0o.c|federateddirectoryclaimprovider|guid
+                                    $groupId = $groupLoginName -replace "c:0o.c\|federateddirectoryclaimprovider\|", ""
+                                    Write-DebugInfo "Found Entra ID group (federated claim): '$groupTitle' (ID: $groupId)" -ForegroundColor Yellow
+                                }
+                                
+                                # If we extracted a group ID, check membership
+                                if ($groupId) {
                                     Write-DebugInfo "Checking Entra ID group membership for '$groupTitle'..." -ForegroundColor Yellow
                                     
                                     # Check if user is member of this Entra ID group
                                     $isMember = Test-EntraGroupMembership -UserPrincipalName $user -GroupId $groupId -GroupDisplayName $groupTitle
                                     
                                     if ($isMember) {
+                                        # Get the permission levels assigned to this group
+                                        $groupPermissions = @()
+                                        try {
+                                            $web = Invoke-PnPCommandWithThrottling -Command {
+                                                Get-PnPWeb -ErrorAction SilentlyContinue
+                                            } -OperationDescription "Get web for group role assignments"
+                                            
+                                            $roleAssignments = Invoke-PnPCommandWithThrottling -Command {
+                                                Get-PnPProperty -ClientObject $web -Property RoleAssignments -ErrorAction SilentlyContinue
+                                            } -OperationDescription "Get role assignments for group permissions"
+                                            
+                                            foreach ($roleAssignment in $roleAssignments) {
+                                                # Load the Member and RoleDefinitionBindings properties
+                                                Invoke-PnPCommandWithThrottling -Command {
+                                                    Get-PnPProperty -ClientObject $roleAssignment -Property Member, RoleDefinitionBindings -ErrorAction SilentlyContinue
+                                                } -OperationDescription "Load role assignment properties for group" | Out-Null
+                                                
+                                                # Check if this role assignment is for our Entra ID group
+                                                if ($roleAssignment.Member.LoginName -eq $groupLoginName) {
+                                                    foreach ($roleDef in $roleAssignment.RoleDefinitionBindings) {
+                                                        if ($roleDef.Name -ne "Limited Access") {
+                                                            $groupPermissions += $roleDef.Name
+                                                            Write-DebugInfo "  Group has permission: $($roleDef.Name)" -ForegroundColor DarkCyan
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        catch {
+                                            Write-DebugInfo "  Could not determine group permissions: $($_.Exception.Message)" -ForegroundColor DarkYellow
+                                        }
+                                        
                                         $userFound = $true
-                                        $accessType += "; Entra ID Group: $groupTitle"
-                                        $groupMemberships += "Entra ID: $groupTitle"
-                                        Write-DebugInfo "✓ Found $user in Entra ID group '$groupTitle' on '$($site.url)'" -ForegroundColor Green
+                                        if ($groupPermissions.Count -gt 0) {
+                                            $permissionsList = ($groupPermissions | Select-Object -Unique) -join ", "
+                                            $accessType += "; Entra ID Group: $groupTitle ($permissionsList)"
+                                            $groupMemberships += "Entra ID: $groupTitle ($permissionsList)"
+                                            Write-DebugInfo "✓ Found $user in Entra ID group '$groupTitle' with permissions: $permissionsList on '$($site.url)'" -ForegroundColor Green
+                                        }
+                                        else {
+                                            $accessType += "; Entra ID Group: $groupTitle"
+                                            $groupMemberships += "Entra ID: $groupTitle"
+                                            Write-DebugInfo "✓ Found $user in Entra ID group '$groupTitle' on '$($site.url)'" -ForegroundColor Green
+                                        }
                                     }
                                     else {
                                         Write-DebugInfo "✗ User $user is NOT in Entra ID group '$groupTitle' on '$($site.url)'" -ForegroundColor DarkGray
                                     }
                                 }
                                 else {
-                                    # This might be a SharePoint group, mark for potential access
-                                    Write-DebugInfo "Found security group '$groupTitle' (non-Entra ID pattern: $groupLoginName)" -ForegroundColor Yellow
+                                    # Unknown group format
+                                    Write-DebugInfo "Found security group '$groupTitle' (unrecognized claim pattern: $groupLoginName)" -ForegroundColor Yellow
                                 }
                             }
                             catch {
@@ -938,6 +1103,42 @@ foreach ($site in $sites) {
             }
             else {
                 Write-Host "EEEU check is disabled - skipping 'Everyone except external users' permissions check" -ForegroundColor DarkGray
+            }
+            
+            # Check 7: If no meaningful permissions found, check if user exists in User Information List
+            # This helps identify PUID mismatch issues where user previously had permissions
+            if (-not $userFound) {
+                Write-DebugInfo "No meaningful permissions found. Checking User Information List..." -ForegroundColor Yellow
+                
+                try {
+                    # Get all users from the User Information List
+                    $allSiteUsers = Invoke-PnPCommandWithThrottling -Command {
+                        Get-PnPUser -ErrorAction SilentlyContinue
+                    } -OperationDescription "Get all site users to check User Information List"
+                    
+                    if ($allSiteUsers) {
+                        # Check if the target user is in the User Information List
+                        $userInList = $allSiteUsers | Where-Object {
+                            $_.LoginName -eq $user -or 
+                            $_.Email -eq $user -or 
+                            $_.UserPrincipalName -eq $user -or
+                            $_.LoginName -like "*$user*"
+                        }
+                        
+                        if ($userInList) {
+                            $userFound = $true
+                            $accessType = "Found in User Information List"
+                            Write-StatusMessage "✓ Found $user in User Information List on '$($site.url)'" -ForegroundColor Magenta
+                            Write-LogEntry -LogName:$Log -LogEntryText "Found $user in User Information List on '$($site.url)'"
+                        }
+                        else {
+                            Write-DebugInfo "User not found in User Information List" -ForegroundColor DarkGray
+                        }
+                    }
+                }
+                catch {
+                    Write-DebugInfo "Could not check User Information List: $($_.Exception.Message)" -ForegroundColor DarkYellow
+                }
             }
             
             if ($userFound) {
