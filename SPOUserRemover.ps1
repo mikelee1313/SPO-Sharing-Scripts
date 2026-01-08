@@ -63,13 +63,16 @@
 #=================================================================================================
 
 # --- Tenant and App Registration Details ---
-$appID = "5baa1427-1e90-4501-831d-a8e67465f0d9"                 # This is your Entra App ID
-$thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certificate thumbprint
-$tenant = "85612ccb-4c28-4a34-88df-a538cc139a51"               # This is your Tenant ID
+$appID = "1e488dc4-1977-48ef-8d4d-9856f4e04536" # This is your Entra App ID
+$thumbprint = "5EAD7303A5C7E27DB4245878AD554642940BA082" # This is certificate thumbprint
+$tenant = "9cfc42cb-51da-4055-87e9-b20a170b6ba3" # This is your Tenant ID
 
 # --- Site and User Configuration ---
-$siteURL = "https://m365x61250205.sharepoint.com/sites/commsite1"       # SharePoint site collection URL
+$useSiteList = $true                                            # Use multiple sites from a list file (true) or single site (false)
+$siteURL = "https://m365cpi13246019.sharepoint.com/sites/TestTeamSite25"       # SharePoint site collection URL (used when $useSiteList is false)
+$siteListPath = 'C:\temp\SiteList.txt'                        # Path to file containing site URLs (one per line, used when $useSiteList is true)
 $userListPath = 'C:\temp\UsersList.txt'                         # Path to the input file containing user emails/logins
+$RemoveFromUIL = $true                                           # Remove users from User Information List (true/false)
 
 #=================================================================================================
 # END OF USER CONFIGURATION
@@ -170,6 +173,27 @@ function Connect-SPOService {
 #endregion
 
 #region User Management Functions
+function Read-SiteList {
+    param([string]$FilePath)
+    
+    try {
+        if (-not (Test-Path $FilePath)) {
+            throw "Site list file not found: $FilePath"
+        }
+        
+        $sites = Get-Content -Path $FilePath | Where-Object { $_ -and $_.Trim() -ne "" -and $_.Trim() -notlike "#*" }
+        Write-Host "Loaded $($sites.Count) sites from file" -ForegroundColor Green
+        Write-Log "Loaded $($sites.Count) sites from file: $FilePath"
+        
+        return $sites
+    }
+    catch {
+        Write-Host "Error reading site list: $_" -ForegroundColor Red
+        Write-Log "Error reading site list: $_" "ERROR"
+        throw
+    }
+}
+
 function Read-UserList {
     param([string]$FilePath)
     
@@ -804,55 +828,70 @@ function Remove-UserFromSharingLinks {
 #endregion
 
 #region Main Script
-function Main {
+function Process-SingleSite {
+    param(
+        [string]$SiteUrl,
+        [array]$Users
+    )
+    
+    Write-Host "`n========================================" -ForegroundColor Cyan
+    Write-Host "Processing Site: $SiteUrl" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Log "Starting processing for site: $SiteUrl"
+    
     try {
-        # Initialize logging
-        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $logFilePath = "$env:TEMP\SPOUserRemover_$timestamp.log"
-        
-        Write-Host "SharePoint Online User Remover Script" -ForegroundColor Magenta
-        Write-Host "=====================================" -ForegroundColor Magenta
-        Write-Host "Site URL: $siteURL" -ForegroundColor White
-        Write-Host "User List: $userListPath" -ForegroundColor White
-        Write-Host "Log File: $logFilePath" -ForegroundColor White
-        Write-Host ""
-        
-        Write-Log "Starting SPO User Remover Script"
-        Write-Log "Site URL: $siteURL"
-        Write-Log "User List: $userListPath"
-        
-        # Read user list
-        $users = Read-UserList -FilePath $userListPath
-        if ($users.Count -eq 0) {
-            throw "No users found in the user list file"
-        }
-        
         # Connect to SharePoint Online
-        if (-not (Connect-SPOService -SiteUrl $siteURL -ClientId $appID -Thumbprint $thumbprint -Tenant $tenant)) {
-            throw "Failed to connect to SharePoint Online"
+        if (-not (Connect-SPOService -SiteUrl $SiteUrl -ClientId $appID -Thumbprint $thumbprint -Tenant $tenant)) {
+            throw "Failed to connect to SharePoint Online: $SiteUrl"
         }
         
         # Remove users from site groups
-        Remove-UserFromSiteGroups -Users $users
+        Remove-UserFromSiteGroups -Users $Users
         
         # Remove users from file permissions
-        Remove-UserFromFilePermissions -Users $users
+        Remove-UserFromFilePermissions -Users $Users
         
         # Remove users from sharing links
-        Remove-UserFromSharingLinks -Users $users
+        Remove-UserFromSharingLinks -Users $Users
         
-        Write-Host "`nScript completed successfully!" -ForegroundColor Green
-        Write-Log "Script completed successfully" "SUCCESS"
+        # Remove users from User Information List if configured
+        if ($RemoveFromUIL) {
+            Write-Host "`nRemoving users from User Information List..." -ForegroundColor Cyan
+            Write-Log "Starting removal from User Information List"
+            
+            foreach ($user in $Users) {
+                try {
+                    Write-Host "  Looking up $user..." -ForegroundColor Yellow
+                    
+                    # Get the user object to retrieve the LoginName
+                    $pnpUser = Get-PnPUser | Where-Object { $_.Email -eq $user }
+                    
+                    if ($pnpUser) {
+                        $loginName = $pnpUser.LoginName
+                        Write-Host "  Removing $loginName from UIL..." -ForegroundColor Yellow
+                        Remove-PnPUser -Identity $loginName -Force:$true
+                        Write-Host "  Successfully removed $user from UIL" -ForegroundColor Green
+                        Write-Log "Removed $user (LoginName: $loginName) from User Information List" "SUCCESS"
+                    }
+                    else {
+                        Write-Host "  User $user not found in site" -ForegroundColor Yellow
+                        Write-Log "User $user not found in site for UIL removal" "WARNING"
+                    }
+                }
+                catch {
+                    Write-Host "  Failed to remove $user from UIL: $_" -ForegroundColor Red
+                    Write-Log "Failed to remove $user from UIL: $_" "ERROR"
+                }
+            }
+        }
         
-        # Generate summary
-        Write-Host "`nSummary:" -ForegroundColor Cyan
-        Write-Host "- Users processed: $($users.Count)" -ForegroundColor White
-        Write-Host "- Log file: $logFilePath" -ForegroundColor White
+        Write-Host "`nCompleted processing for site: $SiteUrl" -ForegroundColor Green
+        Write-Log "Completed processing for site: $SiteUrl" "SUCCESS"
     }
     catch {
-        Write-Host "`nScript failed: $_" -ForegroundColor Red
-        Write-Log "Script failed: $_" "ERROR"
-        exit 1
+        Write-Host "`nError processing site $SiteUrl : $_" -ForegroundColor Red
+        Write-Log "Error processing site $SiteUrl : $_" "ERROR"
+        throw
     }
     finally {
         try {
@@ -862,6 +901,100 @@ function Main {
         catch {
             Write-Log "Warning during disconnect: $_" "WARNING"
         }
+    }
+}
+
+function Main {
+    try {
+        # Initialize logging
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $Script:logFilePath = "$env:TEMP\SPOUserRemover_$timestamp.log"
+        
+        Write-Host "SharePoint Online User Remover Script" -ForegroundColor Magenta
+        Write-Host "=====================================" -ForegroundColor Magenta
+        Write-Host "Multi-Site Mode: $(if($useSiteList){'Enabled'}else{'Disabled'})" -ForegroundColor White
+        if ($useSiteList) {
+            Write-Host "Site List: $siteListPath" -ForegroundColor White
+        }
+        else {
+            Write-Host "Site URL: $siteURL" -ForegroundColor White
+        }
+        Write-Host "User List: $userListPath" -ForegroundColor White
+        Write-Host "Remove from UIL: $RemoveFromUIL" -ForegroundColor White
+        Write-Host "Log File: $Script:logFilePath" -ForegroundColor White
+        Write-Host ""
+        
+        Write-Log "Starting SPO User Remover Script"
+        Write-Log "Multi-Site Mode: $(if($useSiteList){'Enabled'}else{'Disabled'})"
+        Write-Log "User List: $userListPath"
+        
+        # Read user list
+        $users = Read-UserList -FilePath $userListPath
+        if ($users.Count -eq 0) {
+            throw "No users found in the user list file"
+        }
+        
+        # Process sites based on configuration
+        if ($useSiteList) {
+            # Multi-site mode: Process each site in the list
+            $sites = Read-SiteList -FilePath $siteListPath
+            if ($sites.Count -eq 0) {
+                throw "No sites found in the site list file"
+            }
+            
+            Write-Host "Processing $($sites.Count) site(s)...`n" -ForegroundColor Cyan
+            Write-Log "Processing $($sites.Count) site(s)"
+            
+            $siteIndex = 0
+            $successCount = 0
+            $errorCount = 0
+            
+            foreach ($site in $sites) {
+                $siteIndex++
+                Write-Host "`n`n========================================" -ForegroundColor Magenta
+                Write-Host "Site $siteIndex of $($sites.Count)" -ForegroundColor Magenta
+                Write-Host "========================================" -ForegroundColor Magenta
+                
+                try {
+                    Process-SingleSite -SiteUrl $site -Users $users
+                    $successCount++
+                }
+                catch {
+                    Write-Host "Failed to process site: $site" -ForegroundColor Red
+                    Write-Log "Failed to process site: $site - $_" "ERROR"
+                    $errorCount++
+                }
+            }
+            
+            Write-Host "`n`n========================================" -ForegroundColor Magenta
+            Write-Host "All Sites Processing Complete" -ForegroundColor Magenta
+            Write-Host "========================================" -ForegroundColor Magenta
+            Write-Host "Total sites processed: $($sites.Count)" -ForegroundColor White
+            Write-Host "Successful: $successCount" -ForegroundColor Green
+            Write-Host "Failed: $errorCount" -ForegroundColor $(if ($errorCount -gt 0) { 'Red' }else { 'Green' })
+            Write-Log "All sites processing complete - Total: $($sites.Count), Success: $successCount, Failed: $errorCount"
+        }
+        else {
+            # Single site mode: Process only the configured site
+            Write-Log "Single site mode - processing: $siteURL"
+            Process-SingleSite -SiteUrl $siteURL -Users $users
+        }
+        
+        Write-Host "`nScript completed successfully!" -ForegroundColor Green
+        Write-Log "Script completed successfully" "SUCCESS"
+        
+        # Generate summary
+        Write-Host "`nSummary:" -ForegroundColor Cyan
+        Write-Host "- Users processed: $($users.Count)" -ForegroundColor White
+        if ($useSiteList) {
+            Write-Host "- Sites processed: $($sites.Count)" -ForegroundColor White
+        }
+        Write-Host "- Log file: $Script:logFilePath" -ForegroundColor White
+    }
+    catch {
+        Write-Host "`nScript failed: $_" -ForegroundColor Red
+        Write-Log "Script failed: $_" "ERROR"
+        exit 1
     }
 }
 
