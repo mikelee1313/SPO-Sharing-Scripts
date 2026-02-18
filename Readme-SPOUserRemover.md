@@ -10,7 +10,7 @@ The SPOUserRemover.ps1 script is designed to facilitate the removal of users fro
 - **Three-Layer Access Removal**: Removes users at the site, list/library, and item levels to ensure complete access revocation.
 
 ## Prerequisites
-- **PowerShell 5.1+**: Ensure your environment is running at least PowerShell version 5.1.
+- **PowerShell 7.4+**: Ensure your environment is running at least PowerShell version 7.x.
 - **PnP.PowerShell**: Install the PnP.PowerShell module for SharePoint management.
 - **Azure App Registration**: Register an app in Azure AD to authenticate with SharePoint Online.
 - **X.509 Certificate**: Use an X.509 certificate for secure authentication.
