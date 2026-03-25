@@ -1387,36 +1387,15 @@ Function Find-FlexibleLinkOTPUsers {
             return
         }
 
-        # Pre-scan to check whether any external users exist before querying UIL
-        $potentialExternalMembers = $false
-        foreach ($groupName in $flexibleGroups) {
-            $members = $siteCollectionData[$SiteUrl]["SP Users"] | Where-Object { $_.AssociatedSPGroup -eq $groupName }
-            foreach ($member in $members) {
-                $ln = $member.Name
-                if ($ln -match "urn%3aspo%3aguest#|urn:spo:guest#") { $potentialExternalMembers = $true; break }
-                if (-not [string]::IsNullOrWhiteSpace($member.Email) -and
-                    $member.Email -notmatch "@$([regex]::Escape($tenantname))\.onmicrosoft\.com$" -and
-                    $ln -notmatch "#EXT#@") { $potentialExternalMembers = $true; break }
-            }
-            if ($potentialExternalMembers) { break }
-        }
-
         if (-not $siteCollectionData[$SiteUrl].ContainsKey("OTP Detection")) {
             $siteCollectionData[$SiteUrl]["OTP Detection"] = @{}
         }
 
-        if (-not $potentialExternalMembers) {
-            Write-DebugLog -LogName $Log -LogEntryText "No potential external users in Flexible sharing groups for site: $SiteUrl"
-            foreach ($groupName in $flexibleGroups) {
-                $siteCollectionData[$SiteUrl]["OTP Detection"][$groupName] = @{
-                    HasExternalOTPUsers = $false
-                    ExternalOTPUsers    = @()
-                }
-            }
-            return
-        }
-
-        Write-Host "    Potential external users found - querying User Information List for OTP confirmation" -ForegroundColor Yellow
+        # Always query the User Information List (UIL) first.
+        # We cannot rely solely on login-name pattern matching for the pre-scan because
+        # OTP users added via Get-SharingLinkUrls (GrantedToIdentitiesV2) are stored with
+        # their Entra object ID (a GUID) as the login name — not the urn:spo:guest# form.
+        # Querying UIL first lets us catch those users via email matching in the per-member loop.
         Write-InfoLog -LogName $Log -LogEntryText "Querying User Information List for OTP user confirmation on site: $SiteUrl"
 
         $uiListOTPUsers = @{}
@@ -1455,6 +1434,36 @@ Function Find-FlexibleLinkOTPUsers {
             Write-ErrorLog -LogName $Log -LogEntryText "Error querying User Information List for site $SiteUrl : $_"
         }
 
+        # Early-return optimisation: skip per-group work if the UIL has no OTP users
+        # AND no member has the urn:spo:guest# pattern in their login name.
+        if ($uiListOTPUsers.Count -eq 0) {
+            $hasAnyOTPLoginPattern = $false
+            foreach ($groupName in $flexibleGroups) {
+                $members = $siteCollectionData[$SiteUrl]["SP Users"] | Where-Object { $_.AssociatedSPGroup -eq $groupName }
+                foreach ($member in $members) {
+                    if ([System.Uri]::UnescapeDataString($member.Name) -match "urn:spo:guest#") {
+                        $hasAnyOTPLoginPattern = $true
+                        break
+                    }
+                }
+                if ($hasAnyOTPLoginPattern) { break }
+            }
+
+            if (-not $hasAnyOTPLoginPattern) {
+                Write-DebugLog -LogName $Log -LogEntryText "No OTP users in UIL and no urn:spo:guest# login patterns found for site: $SiteUrl"
+                foreach ($groupName in $flexibleGroups) {
+                    $siteCollectionData[$SiteUrl]["OTP Detection"][$groupName] = @{
+                        HasExternalOTPUsers = $false
+                        ExternalOTPUsers    = @()
+                    }
+                }
+                return
+            }
+        }
+        else {
+            Write-Host "    UIL contains $($uiListOTPUsers.Count) OTP user(s) - checking Flexible sharing group membership" -ForegroundColor Yellow
+        }
+
         foreach ($groupName in $flexibleGroups) {
             $members = $siteCollectionData[$SiteUrl]["SP Users"] | Where-Object { $_.AssociatedSPGroup -eq $groupName }
             $externalOTPUsersInGroup = [System.Collections.Generic.List[PSObject]]::new()
@@ -1463,35 +1472,39 @@ Function Find-FlexibleLinkOTPUsers {
             foreach ($member in $members) {
                 $loginName = $member.Name
                 $email = $member.Email
-                $isOTPPattern = $loginName -match "urn%3aspo%3aguest#|urn:spo:guest#"
+                # URL-decode the login name to handle all encoding variants before matching.
+                $decodedLoginName = [System.Uri]::UnescapeDataString($loginName)
+                $isOTPPattern = $decodedLoginName -match "urn:spo:guest#"
 
                 if ($isOTPPattern -and [string]::IsNullOrWhiteSpace($email)) {
-                    if ($loginName -match "urn:spo:guest#(.+)$") {
+                    # $decodedLoginName is already URL-decoded; extract email after the # token
+                    if ($decodedLoginName -match "urn:spo:guest#(.+)$") {
                         $email = $matches[1].Trim()
-                    }
-                    elseif ($loginName -match "urn%3aspo%3aguest#(.+)$") {
-                        $email = [System.Uri]::UnescapeDataString($matches[1].Trim())
                     }
                 }
 
-                $isExternalEmail = (
+                # Only flag users whose login name contains the OTP guest token
+                # OR whose email is confirmed as an OTP user in the UIL.
+                # The second check catches OTP users stored with a GUID login name
+                # (added via Get-SharingLinkUrls from GrantedToIdentitiesV2, where
+                # Graph returns the Entra object ID rather than the SPO login name).
+                $isConfirmedByUIL = (
                     -not [string]::IsNullOrWhiteSpace($email) -and
-                    $email -notmatch "@$([regex]::Escape($tenantname))\.onmicrosoft\.com$" -and
-                    $loginName -notmatch "#EXT#@"
+                    $uiListOTPUsers.ContainsKey($email.ToLower())
                 )
 
-                if ($isOTPPattern -or $isExternalEmail) {
+                if ($isOTPPattern -or $isConfirmedByUIL) {
                     $hasExternalOTPUsers = $true
-                    $confirmedInUIL = $false
+                    # $isConfirmedByUIL already computed above; use it directly
+                    $confirmedInUIL = $isConfirmedByUIL
                     $uilDetails = ""
 
-                    if (-not [string]::IsNullOrWhiteSpace($email) -and $uiListOTPUsers.ContainsKey($email.ToLower())) {
-                        $confirmedInUIL = $true
+                    if ($isConfirmedByUIL) {
                         $uilDetails = $uiListOTPUsers[$email.ToLower()].LoginName
                         Write-DebugLog -LogName $Log -LogEntryText "OTP confirmed via UIL for '$groupName': Email='$email', UIL LoginName='$uilDetails'"
                     }
                     else {
-                        Write-DebugLog -LogName $Log -LogEntryText "External user NOT confirmed as OTP in UIL for '$groupName': Email='$email', LoginName='$loginName'"
+                        Write-DebugLog -LogName $Log -LogEntryText "OTP login pattern found but not confirmed in UIL for '$groupName': Email='$email', LoginName='$loginName'"
                     }
 
                     $externalOTPUsersInGroup.Add([PSCustomObject]@{
