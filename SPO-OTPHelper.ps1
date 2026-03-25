@@ -29,7 +29,8 @@
     The tenant ID (GUID) for your Microsoft 365 tenant.
 
 .PARAMETER searchRegion
-    The region for Microsoft Graph search operations (e.g., "NAM", "EUR").
+    The region for Microsoft Graph search operations (e.g., "NAM", "EUR", "APC", "GBR", "CAN", etc.).
+    Leave empty (default) to auto-detect the correct region for your tenant.
 
 .PARAMETER Mode
     This script runs in Detection-only mode. No sharing links or permissions are modified.
@@ -82,7 +83,8 @@
 
 .NOTES
     Authors: Mike Lee
-    Updated: 3/24/2026
+    Created: 3/24/2026
+    Updated: 3/25/2026 - added multi-geo Graph Search region detection and handling
     Purpose: MC1243549 - Retirement of SharePoint One-Time Passcode (SPO OTP) and transition
              to Microsoft Entra B2B guest accounts. Run this script to identify Flexible sharing
              links that expose OTP users, so admins can assess the retirement impact.
@@ -125,7 +127,7 @@ $tenantname = "m365cpi13246019"                                   # This is your
 $appID = "abc64618-283f-47ba-a185-50d935d51d57"                 # This is your Entra App ID
 $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certificate thumbprint
 $tenant = "9cfc42cb-51da-4055-87e9-b20a170b6ba3"                # This is your Tenant ID
-$searchRegion = "NAM"                                           # Region for Microsoft Graph search
+$searchRegion = ""                                              # Region for Microsoft Graph search (leave empty to auto-detect, or set explicitly: US/NAM/EUR/APC/GBR/CAN/IND/AUS/JPN/DEU/etc.)
 $debugLogging = $false                                         # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
 
 # ----------------------------------------------
@@ -358,6 +360,165 @@ Function Invoke-WithThrottleHandling {
 }
 
 # ----------------------------------------------
+# Graph Search Region Detection
+# ----------------------------------------------
+Function Test-GraphSearchRegion {
+    <#
+    .SYNOPSIS
+    Tests whether a given region code is valid for this tenant's Graph Search API.
+    Returns $true if the region works (HTTP 200), $false if it fails (HTTP 400 = wrong region).
+    #>
+    param(
+        [string] $Region,
+        [hashtable] $Headers
+    )
+
+    $testQuery = @{
+        requests = @(
+            @{
+                entityTypes               = @("driveItem")
+                query                     = @{ queryString = "test" }
+                from                      = 0
+                size                      = 1
+                sharePointOneDriveOptions = @{ includeContent = "sharedContent" }
+                region                    = $Region
+            }
+        )
+    }
+
+    try {
+        Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/search/query" `
+            -Headers $Headers -Method Post `
+            -Body ($testQuery | ConvertTo-Json -Depth 5) `
+            -ErrorAction Stop | Out-Null
+        Write-DebugLog -LogName $Log -LogEntryText "Region probe succeeded: $Region"
+        return $true
+    }
+    catch {
+        Write-DebugLog -LogName $Log -LogEntryText "Region probe failed for '$Region': $_"
+        return $false
+    }
+}
+
+Function Get-GraphSearchRegion {
+    <#
+    .SYNOPSIS
+    Auto-detects the correct Microsoft Graph Search region for this tenant by probing the
+    search API with candidate regions until one succeeds (HTTP 200 vs 400 Bad Request).
+    Regions are tried in order of Microsoft 365 global customer volume.
+    #>
+
+    Write-Host "  Auto-detecting Microsoft Graph Search region..." -ForegroundColor Cyan
+    Write-InfoLog -LogName $Log -LogEntryText "Auto-detecting Microsoft Graph Search region (\$searchRegion is empty)"
+
+    try {
+        $graphToken = Get-PnPGraphTokenCompatible
+        if (-not $graphToken) {
+            Write-ErrorLog -LogName $Log -LogEntryText "Unable to obtain Graph token for region auto-detection, defaulting to NAM"
+            return "NAM"
+        }
+
+        $headers = @{
+            "Authorization" = "Bearer $graphToken"
+            "Content-Type"  = "application/json"
+        }
+
+        # Ordered by Microsoft 365 global market share / likelihood
+        # "US" is an alternate code for NAM used in some non-multi-geo tenants
+        $regionsToProbe = @(
+            "NAM", "US", "EUR", "APC", "GBR", "CAN",
+            "IND", "AUS", "JPN", "DEU", "ZAF",
+            "ARE", "CHE", "NOR", "KOR", "SWE",
+            "TWN", "FRA", "ITA", "MEX", "LAM",
+            "NZL", "SGP", "BRA", "MYS", "QAT", "POL"
+        )
+
+        foreach ($region in $regionsToProbe) {
+            if (Test-GraphSearchRegion -Region $region -Headers $headers) {
+                Write-Host "  Graph Search region auto-detected: $region" -ForegroundColor Green
+                Write-InfoLog -LogName $Log -LogEntryText "Graph Search region auto-detected: $region"
+                return $region
+            }
+        }
+    }
+    catch {
+        Write-ErrorLog -LogName $Log -LogEntryText "Unexpected error during Graph Search region auto-detection: $_"
+    }
+
+    Write-Host "  Could not auto-detect Graph Search region, defaulting to NAM" -ForegroundColor Yellow
+    Write-InfoLog -LogName $Log -LogEntryText "Graph Search region auto-detection failed, defaulting to NAM"
+    return "NAM"
+}
+
+# ----------------------------------------------
+# Multi-Geo: Resolve the correct Graph Search region for a specific site's geo location.
+# Get-PnPTenantSite returns a GeoLocation property (e.g. "NAM", "EUR", "APC") per site.
+# In multi-geo tenants, sites in satellite geos must use the matching region code.
+# Results are cached to avoid re-probing the same geo multiple times.
+# For non-multi-geo tenants, GeoLocation is empty and the global $searchRegion is used.
+# ----------------------------------------------
+Function Get-SiteSearchRegion {
+    param(
+        [string] $GeoLocation
+    )
+
+    # Non-multi-geo: no geo location set — use the already-resolved global region
+    if ([string]::IsNullOrWhiteSpace($GeoLocation)) {
+        return $searchRegion
+    }
+
+    $geoKey = $GeoLocation.ToUpper()
+
+    # Cache hit — return immediately without re-probing
+    if ($geoRegionCache.ContainsKey($geoKey)) {
+        Write-DebugLog -LogName $Log -LogEntryText "Geo region cache hit for '$geoKey': $($geoRegionCache[$geoKey])"
+        return $geoRegionCache[$geoKey]
+    }
+
+    Write-Host "  Probing Graph Search region for geo location: $geoKey" -ForegroundColor Cyan
+    Write-InfoLog -LogName $Log -LogEntryText "Multi-geo: probing Graph Search region for geo '$geoKey'"
+
+    try {
+        $graphToken = Get-PnPGraphTokenCompatible
+        if (-not $graphToken) {
+            Write-ErrorLog -LogName $Log -LogEntryText "Unable to obtain Graph token for geo region probe '$geoKey', using default: $searchRegion"
+            $geoRegionCache[$geoKey] = $searchRegion
+            return $searchRegion
+        }
+
+        $headers = @{
+            "Authorization" = "Bearer $graphToken"
+            "Content-Type"  = "application/json"
+        }
+
+        # Try the GeoLocation code directly — SPO geo codes match Graph Search region codes
+        if (Test-GraphSearchRegion -Region $geoKey -Headers $headers) {
+            Write-Host "  Graph Search region confirmed for geo '$geoKey': $geoKey" -ForegroundColor Green
+            Write-InfoLog -LogName $Log -LogEntryText "Multi-geo: Graph Search region confirmed for geo '$geoKey': $geoKey"
+            $geoRegionCache[$geoKey] = $geoKey
+            return $geoKey
+        }
+
+        # "US" is sometimes used instead of "NAM" for the North America geo
+        if ($geoKey -eq "NAM" -and (Test-GraphSearchRegion -Region "US" -Headers $headers)) {
+            Write-Host "  Graph Search region confirmed for geo 'NAM': US (alternate code)" -ForegroundColor Green
+            Write-InfoLog -LogName $Log -LogEntryText "Multi-geo: Graph Search region confirmed for geo 'NAM' using alternate code 'US'"
+            $geoRegionCache[$geoKey] = "US"
+            return "US"
+        }
+    }
+    catch {
+        Write-ErrorLog -LogName $Log -LogEntryText "Error probing Graph Search region for geo '$geoKey': $_"
+    }
+
+    # Fallback: use the globally resolved region
+    Write-Host "  Could not confirm Graph Search region for geo '$geoKey', using default: $searchRegion" -ForegroundColor Yellow
+    Write-InfoLog -LogName $Log -LogEntryText "Multi-geo: could not confirm region for geo '$geoKey', falling back to: $searchRegion"
+    $geoRegionCache[$geoKey] = $searchRegion
+    return $searchRegion
+}
+
+# ----------------------------------------------
 # Connect to Admin Center initially
 # ----------------------------------------------
 try {
@@ -369,6 +530,17 @@ catch {
     Write-Host "Error connecting to SharePoint Admin Center ($adminUrl): $_" -ForegroundColor Red
     Write-ErrorLog -LogName $Log -LogEntryText "Error connecting to SharePoint Admin Center ($adminUrl): $_"
     exit
+}
+
+# ----------------------------------------------
+# Resolve Graph Search Region
+# ----------------------------------------------
+if ([string]::IsNullOrWhiteSpace($searchRegion)) {
+    $searchRegion = Get-GraphSearchRegion
+}
+else {
+    Write-Host "  Using configured Graph Search region: $searchRegion" -ForegroundColor Cyan
+    Write-InfoLog -LogName $Log -LogEntryText "Using configured Graph Search region: $searchRegion"
 }
 
 # ----------------------------------------------
@@ -407,6 +579,7 @@ else {
                 $_.Template -notmatch "SRCHCEN|MYSITE|APPCATALOG|PWS|POINTPUBLISHINGTOPIC|SPSMSITEHOST|EHS|REVIEWCTR|TENANTADMIN" -and
                 $_.Status -eq "Active" -and
                 $_.ArchiveStatus -eq "NotArchived" -and
+                $_.SharingCapability -ne "Disabled" -and
                 -not [string]::IsNullOrEmpty($_.Url)
             }
         } -Operation "Get-PnPTenantSite with optimized filtering"
@@ -425,6 +598,9 @@ else {
 # Initialize a hashtable to store site collection data (keyed by URL)
 # ----------------------------------------------
 $siteCollectionData = @{}
+
+# Cache for geo location -> validated Graph Search region (avoids re-probing the same geo)
+$geoRegionCache = @{}
 
 # ----------------------------------------------
 # Initialize the sharing links output file with headers
@@ -460,6 +636,7 @@ Function Update-SiteCollectionData {
             "SharingCapability"       = $SiteProperties.SharingCapability
             "IsTeamsConnected"        = $SiteProperties.IsTeamsConnected
             "LastContentModifiedDate" = $SiteProperties.LastContentModifiedDate
+            "GeoLocation"             = $SiteProperties.GeoLocation
             # Site-specific lists
             "SP Groups On Site"       = [System.Collections.Generic.List[string]]::new()
             "SP Users"                = [System.Collections.Generic.List[PSObject]]::new()
@@ -1390,6 +1567,11 @@ foreach ($site in $sites) {
             # Reconnect to the site for group processing
             Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
 
+            # Resolve the Graph Search region for this site's geo location (multi-geo aware).
+            # For non-multi-geo tenants, GeoLocation is empty and Get-SiteSearchRegion returns $searchRegion.
+            $siteSearchRegion = Get-SiteSearchRegion -GeoLocation $siteProperties.GeoLocation
+            Write-DebugLog -LogName $Log -LogEntryText "Site '$siteUrl' geo='$($siteProperties.GeoLocation)' -> search region='$siteSearchRegion'"
+
             # Skip archived sites — safety-net for sites loaded from an input CSV file,
             # which cannot be pre-filtered. ArchiveStatus "NotArchived" is the only processable state.
             if ($siteProperties.ArchiveStatus -ne "NotArchived") {
@@ -1487,7 +1669,7 @@ foreach ($site in $sites) {
                                 } -Operation "Get Graph access token for document search"
 
                                 if ($graphToken) {
-                                    $searchResult = Search-DocumentViaGraphAPI -DocumentId $documentId -SearchRegion $searchRegion -LogContext "Main loop - document search"
+                                    $searchResult = Search-DocumentViaGraphAPI -DocumentId $documentId -SearchRegion $siteSearchRegion -LogContext "Main loop - document search"
 
                                     if ($searchResult.Found) {
                                         $searchStatus = "Found"
