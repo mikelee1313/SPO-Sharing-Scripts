@@ -44,6 +44,10 @@
     Optional. Path to a CSV file containing a list of SharePoint site URLs (one URL per line, or with a "URL" header).
     If not specified, the script will process all sites in the tenant.
 
+.PARAMETER GetOneDriveInfo
+    When set to $true, the script scans OneDrive for Business (personal) sites ONLY.
+    When set to $false (default), OneDrive sites are skipped and only SharePoint sites are scanned.
+
 .OUTPUTS
     - CSV file containing Flexible sharing links that contain external OTP users (MC1243549 impact scope only)
     - Log file with operation details and errors
@@ -85,6 +89,7 @@
     Authors: Mike Lee
     Created: 3/24/2026
     Updated: 3/25/2026 - added multi-geo Graph Search region detection and handling
+    Updated: 3/26/2026 - added support for scanning OneDrive Sites (optional parameter)
     Purpose: MC1243549 - Retirement of SharePoint One-Time Passcode (SPO OTP) and transition
              to Microsoft Entra B2B guest accounts. Run this script to identify Flexible sharing
              links that expose OTP users, so admins can assess the retirement impact.
@@ -129,6 +134,7 @@ $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certif
 $tenant = "9cfc42cb-51da-4055-87e9-b20a170b6ba3"                # This is your Tenant ID
 $searchRegion = ""                                              # Region for Microsoft Graph search (leave empty to auto-detect, or set explicitly: US/NAM/EUR/APC/GBR/CAN/IND/AUS/JPN/DEU/etc.)
 $debugLogging = $false                                         # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
+$GetOneDriveInfo = $false                                      # Set to $true to scan OneDrive sites ONLY; $false (default) scans SharePoint sites and skips OneDrive
 
 # ----------------------------------------------
 # Initialize Parameters - Do not change
@@ -574,15 +580,32 @@ else {
     Write-InfoLog -LogName $Log -LogEntryText "Getting sites using Get-PnPTenantSite (no input file specified or found)"
     try {
         # Get sites with optimized filtering to reduce memory usage and improve performance
-        $sites = Invoke-WithThrottleHandling -ScriptBlock {
-            Get-PnPTenantSite -IncludeOneDriveSites:$false | Where-Object {
-                $_.Template -notmatch "SRCHCEN|MYSITE|APPCATALOG|PWS|POINTPUBLISHINGTOPIC|SPSMSITEHOST|EHS|REVIEWCTR|TENANTADMIN" -and
-                $_.Status -eq "Active" -and
-                $_.ArchiveStatus -eq "NotArchived" -and
-                $_.SharingCapability -ne "Disabled" -and
-                -not [string]::IsNullOrEmpty($_.Url)
-            }
-        } -Operation "Get-PnPTenantSite with optimized filtering"
+        if ($GetOneDriveInfo) {
+            Write-Host "  Mode: OneDrive sites ONLY ($GetOneDriveInfo = $true)" -ForegroundColor Cyan
+            Write-InfoLog -LogName $Log -LogEntryText "GetOneDriveInfo=$true : retrieving OneDrive personal sites only"
+            $sites = Invoke-WithThrottleHandling -ScriptBlock {
+                Get-PnPTenantSite -IncludeOneDriveSites:$true | Where-Object {
+                    $_.Url -like "*-my.sharepoint.com/personal/*" -and
+                    $_.Status -eq "Active" -and
+                    $_.ArchiveStatus -eq "NotArchived" -and
+                    $_.SharingCapability -ne "Disabled" -and
+                    -not [string]::IsNullOrEmpty($_.Url)
+                }
+            } -Operation "Get-PnPTenantSite (OneDrive sites only)"
+        }
+        else {
+            Write-Host "  Mode: SharePoint sites only (OneDrive excluded)" -ForegroundColor Cyan
+            Write-InfoLog -LogName $Log -LogEntryText "GetOneDriveInfo=$false : retrieving SharePoint sites, skipping OneDrive"
+            $sites = Invoke-WithThrottleHandling -ScriptBlock {
+                Get-PnPTenantSite -IncludeOneDriveSites:$false | Where-Object {
+                    $_.Template -notmatch "SRCHCEN|MYSITE|APPCATALOG|PWS|POINTPUBLISHINGTOPIC|SPSMSITEHOST|EHS|REVIEWCTR|TENANTADMIN" -and
+                    $_.Status -eq "Active" -and
+                    $_.ArchiveStatus -eq "NotArchived" -and
+                    $_.SharingCapability -ne "Disabled" -and
+                    -not [string]::IsNullOrEmpty($_.Url)
+                }
+            } -Operation "Get-PnPTenantSite with optimized filtering"
+        }
         
         Write-Host "Found $($sites.Count) sites for processing after filtering." -ForegroundColor Green
         Write-InfoLog -LogName $log -LogEntryText "Retrieved and filtered to $($sites.Count) sites for processing."
