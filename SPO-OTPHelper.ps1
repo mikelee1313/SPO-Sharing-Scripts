@@ -76,8 +76,8 @@
       * "Search Error" - An unexpected error occurred during all lookup attempts
       * "Not Searched" - Search was not attempted
     - Has External OTP Users: Whether the Flexible link contains external OTP users (True/False)
-    - External OTP Users: Semicolon-separated list of external user emails; "[OTP Confirmed]" suffix
-      indicates the user was found in the site's User Information List with an OTP login pattern
+    - External OTP Users: Semicolon-separated list of external user emails confirmed as OTP users
+      via the site's User Information List (identified by the "urn:spo:guest#" login pattern)
     - OTP Confirmed: Whether at least one external user was confirmed as an OTP user via the
       User Information List (True/False)
 
@@ -827,7 +827,6 @@ Function Write-SiteSharingLinks {
                     foreach ($otpUser in $otpData.ExternalOTPUsers) {
                         $userLabel = if (-not [string]::IsNullOrWhiteSpace($otpUser.Email)) { $otpUser.Email } else { $otpUser.LoginName }
                         if ($otpUser.ConfirmedInUIL) {
-                            $userLabel += " [OTP Confirmed]"
                             $anyConfirmed = $true
                         }
                         $otpUserStrings.Add($userLabel)
