@@ -21,7 +21,8 @@
     The tenant ID (GUID) for your Microsoft 365 tenant.
 
 .PARAMETER searchRegion
-    The region for Microsoft Graph search operations (e.g., "NAM", "EUR").
+    The region for Microsoft Graph search operations (e.g., "NAM", "EUR", "APC", "GBR", "CAN", etc.).
+    Leave empty (default) to auto-detect the correct region for your tenant.
 
 .PARAMETER Mode
     Sets the script operation mode:
@@ -38,6 +39,10 @@
 .PARAMETER debugLogging
     When set to $true, the script logs detailed DEBUG operations for troubleshooting.
     When set to $false, only INFO and ERROR operations are logged.
+
+.PARAMETER GetOneDriveInfo
+    When set to $true, the script scans OneDrive for Business (personal) sites ONLY.
+    When set to $false (default), OneDrive sites are skipped and only SharePoint sites are scanned.
 
 .PARAMETER inputfile
     Optional. Path to a CSV file containing either:
@@ -74,8 +79,9 @@
     - Last Content Modified: Last modification date of the site content
     - Search Status: Indicates if the document was found in search results
       * "Found" - Document located and indexed in search
-      * "Not Found in Search" - Document exists but not indexed/searchable
-      * "Search Error" - Error occurred during search operation
+      * "Found (REST Fallback)" - Document located via SharePoint REST API (not yet indexed in Graph search)
+      * "File Not Found" - Document not found via any method — sharing link likely points to a deleted or moved file
+      * "Search Error" - An unexpected error occurred during all lookup attempts
       * "Not Searched" - Search was not attempted
     - Link Removed: Whether the sharing link was removed (in remediation mode)
 
@@ -143,9 +149,10 @@ $tenantname = "m365cpi13246019"                                   # This is your
 $appID = "abc64618-283f-47ba-a185-50d935d51d57"                 # This is your Entra App ID
 $thumbprint = "B696FDCFE1453F3FBC6031F54DE988DA0ED905A9"        # This is certificate thumbprint
 $tenant = "9cfc42cb-51da-4055-87e9-b20a170b6ba3"                # This is your Tenant ID
-$searchRegion = "NAM"                                           # Region for Microsoft Graph search
+$searchRegion = ""                                              # Region for Microsoft Graph search (leave empty to auto-detect, or set explicitly: NAM, EUR, APC, GBR, CAN, IND, AUS, JPN, etc.)
 $Mode = "Detection"                                             # Set to "Detection" for report mode, "Remediation" to convert Organization sharing links to direct permissions
 $debugLogging = $false                                          # Set to $true for detailed DEBUG logging, $false for INFO and ERROR logging only
+$GetOneDriveInfo = $false                                       # Set to $true to scan OneDrive sites ONLY; $false (default) scans SharePoint sites and skips OneDrive
 
 # ----------------------------------------------
 # Initialize Parameters - Do not change
@@ -265,6 +272,165 @@ Function Get-PnPGraphTokenCompatible {
 }
 
 # ----------------------------------------------
+# Graph Search Region Detection
+# ----------------------------------------------
+Function Test-GraphSearchRegion {
+    <#
+    .SYNOPSIS
+    Tests whether a given region code is valid for this tenant's Graph Search API.
+    Returns $true if the region works (HTTP 200), $false if it fails (HTTP 400 = wrong region).
+    #>
+    param(
+        [string] $Region,
+        [hashtable] $Headers
+    )
+
+    $testQuery = @{
+        requests = @(
+            @{
+                entityTypes               = @("driveItem")
+                query                     = @{ queryString = "test" }
+                from                      = 0
+                size                      = 1
+                sharePointOneDriveOptions = @{ includeContent = "sharedContent" }
+                region                    = $Region
+            }
+        )
+    }
+
+    try {
+        Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/search/query" `
+            -Headers $Headers -Method Post `
+            -Body ($testQuery | ConvertTo-Json -Depth 5) `
+            -ErrorAction Stop | Out-Null
+        Write-DebugLog -LogName $Log -LogEntryText "Region probe succeeded: $Region"
+        return $true
+    }
+    catch {
+        Write-DebugLog -LogName $Log -LogEntryText "Region probe failed for '$Region': $_"
+        return $false
+    }
+}
+
+Function Get-GraphSearchRegion {
+    <#
+    .SYNOPSIS
+    Auto-detects the correct Microsoft Graph Search region for this tenant by probing the
+    search API with candidate regions until one succeeds (HTTP 200 vs 400 Bad Request).
+    Regions are tried in order of Microsoft 365 global customer volume.
+    #>
+
+    Write-Host "  Auto-detecting Microsoft Graph Search region..." -ForegroundColor Cyan
+    Write-InfoLog -LogName $Log -LogEntryText "Auto-detecting Microsoft Graph Search region (\$searchRegion is empty)"
+
+    try {
+        $graphToken = Get-PnPGraphTokenCompatible
+        if (-not $graphToken) {
+            Write-ErrorLog -LogName $Log -LogEntryText "Unable to obtain Graph token for region auto-detection, defaulting to NAM"
+            return "NAM"
+        }
+
+        $headers = @{
+            "Authorization" = "Bearer $graphToken"
+            "Content-Type"  = "application/json"
+        }
+
+        # Ordered by Microsoft 365 global market share / likelihood
+        # "US" is an alternate code for NAM used in some non-multi-geo tenants
+        $regionsToProbe = @(
+            "NAM", "US", "EUR", "APC", "GBR", "CAN",
+            "IND", "AUS", "JPN", "DEU", "ZAF",
+            "ARE", "CHE", "NOR", "KOR", "SWE",
+            "TWN", "FRA", "ITA", "MEX", "LAM",
+            "NZL", "SGP", "BRA", "MYS", "QAT", "POL"
+        )
+
+        foreach ($region in $regionsToProbe) {
+            if (Test-GraphSearchRegion -Region $region -Headers $headers) {
+                Write-Host "  Graph Search region auto-detected: $region" -ForegroundColor Green
+                Write-InfoLog -LogName $Log -LogEntryText "Graph Search region auto-detected: $region"
+                return $region
+            }
+        }
+    }
+    catch {
+        Write-ErrorLog -LogName $Log -LogEntryText "Unexpected error during Graph Search region auto-detection: $_"
+    }
+
+    Write-Host "  Could not auto-detect Graph Search region, defaulting to NAM" -ForegroundColor Yellow
+    Write-InfoLog -LogName $Log -LogEntryText "Graph Search region auto-detection failed, defaulting to NAM"
+    return "NAM"
+}
+
+# ----------------------------------------------
+# Multi-Geo: Resolve the correct Graph Search region for a specific site's geo location.
+# Get-PnPTenantSite returns a GeoLocation property (e.g. "NAM", "EUR", "APC") per site.
+# In multi-geo tenants, sites in satellite geos must use the matching region code.
+# Results are cached to avoid re-probing the same geo multiple times.
+# For non-multi-geo tenants, GeoLocation is empty and the global $searchRegion is used.
+# ----------------------------------------------
+Function Get-SiteSearchRegion {
+    param(
+        [string] $GeoLocation
+    )
+
+    # Non-multi-geo: no geo location set — use the already-resolved global region
+    if ([string]::IsNullOrWhiteSpace($GeoLocation)) {
+        return $searchRegion
+    }
+
+    $geoKey = $GeoLocation.ToUpper()
+
+    # Cache hit — return immediately without re-probing
+    if ($geoRegionCache.ContainsKey($geoKey)) {
+        Write-DebugLog -LogName $Log -LogEntryText "Geo region cache hit for '$geoKey': $($geoRegionCache[$geoKey])"
+        return $geoRegionCache[$geoKey]
+    }
+
+    Write-Host "  Probing Graph Search region for geo location: $geoKey" -ForegroundColor Cyan
+    Write-InfoLog -LogName $Log -LogEntryText "Multi-geo: probing Graph Search region for geo '$geoKey'"
+
+    try {
+        $graphToken = Get-PnPGraphTokenCompatible
+        if (-not $graphToken) {
+            Write-ErrorLog -LogName $Log -LogEntryText "Unable to obtain Graph token for geo region probe '$geoKey', using default: $searchRegion"
+            $geoRegionCache[$geoKey] = $searchRegion
+            return $searchRegion
+        }
+
+        $headers = @{
+            "Authorization" = "Bearer $graphToken"
+            "Content-Type"  = "application/json"
+        }
+
+        # Try the GeoLocation code directly — SPO geo codes match Graph Search region codes
+        if (Test-GraphSearchRegion -Region $geoKey -Headers $headers) {
+            Write-Host "  Graph Search region confirmed for geo '$geoKey': $geoKey" -ForegroundColor Green
+            Write-InfoLog -LogName $Log -LogEntryText "Multi-geo: Graph Search region confirmed for geo '$geoKey': $geoKey"
+            $geoRegionCache[$geoKey] = $geoKey
+            return $geoKey
+        }
+
+        # "US" is sometimes used instead of "NAM" for the North America geo
+        if ($geoKey -eq "NAM" -and (Test-GraphSearchRegion -Region "US" -Headers $headers)) {
+            Write-Host "  Graph Search region confirmed for geo 'NAM': US (alternate code)" -ForegroundColor Green
+            Write-InfoLog -LogName $Log -LogEntryText "Multi-geo: Graph Search region confirmed for geo 'NAM' using alternate code 'US'"
+            $geoRegionCache[$geoKey] = "US"
+            return "US"
+        }
+    }
+    catch {
+        Write-ErrorLog -LogName $Log -LogEntryText "Error probing Graph Search region for geo '$geoKey': $_"
+    }
+
+    # Fallback: use the globally resolved region
+    Write-Host "  Could not confirm Graph Search region for geo '$geoKey', using default: $searchRegion" -ForegroundColor Yellow
+    Write-InfoLog -LogName $Log -LogEntryText "Multi-geo: could not confirm region for geo '$geoKey', falling back to: $searchRegion"
+    $geoRegionCache[$geoKey] = $searchRegion
+    return $searchRegion
+}
+
+# ----------------------------------------------
 # Determine Script Operation Mode and Auto-Configure Settings
 # ----------------------------------------------
 
@@ -296,6 +462,7 @@ Write-InfoLog -LogName $Log -LogEntryText "Script is running in $scriptMode mode
 # ----------------------------------------------
 # Connection Parameters
 # ----------------------------------------------
+Add-Type -AssemblyName System.Web   # Required for [System.Web.HttpUtility]::UrlDecode used in filename extraction
 $connectionParams = @{
     ClientId      = $appID
     Thumbprint    = $thumbprint
@@ -410,6 +577,17 @@ catch {
 }
 
 # ----------------------------------------------
+# Resolve Graph Search Region
+# ----------------------------------------------
+if ([string]::IsNullOrWhiteSpace($searchRegion)) {
+    $searchRegion = Get-GraphSearchRegion
+}
+else {
+    Write-Host "  Using configured Graph Search region: $searchRegion" -ForegroundColor Cyan
+    Write-InfoLog -LogName $Log -LogEntryText "Using configured Graph Search region: $searchRegion"
+}
+
+# ----------------------------------------------
 # Get Site List
 # ----------------------------------------------
 if ($inputfile -and (Test-Path -Path $inputfile)) {
@@ -478,13 +656,30 @@ else {
     Write-InfoLog -LogName $Log -LogEntryText "Getting sites using Get-PnPTenantSite (no input file specified or found)"
     try {
         # Get sites with optimized filtering to reduce memory usage and improve performance
-        $sites = Invoke-WithThrottleHandling -ScriptBlock {
-            Get-PnPTenantSite -IncludeOneDriveSites:$false | Where-Object {
-                $_.Template -notmatch "SRCHCEN|MYSITE|APPCATALOG|PWS|POINTPUBLISHINGTOPIC|SPSMSITEHOST|EHS|REVIEWCTR|TENANTADMIN" -and
-                $_.Status -eq "Active" -and
-                -not [string]::IsNullOrEmpty($_.Url)
-            }
-        } -Operation "Get-PnPTenantSite with optimized filtering"
+        if ($GetOneDriveInfo) {
+            Write-Host "  Mode: OneDrive sites ONLY (GetOneDriveInfo = `$true)" -ForegroundColor Cyan
+            Write-InfoLog -LogName $Log -LogEntryText "GetOneDriveInfo=`$true: retrieving OneDrive personal sites only"
+            $sites = Invoke-WithThrottleHandling -ScriptBlock {
+                Get-PnPTenantSite -IncludeOneDriveSites:$true | Where-Object {
+                    $_.Url -like "*-my.sharepoint.com/personal/*" -and
+                    $_.Status -eq "Active" -and
+                    $_.ArchiveStatus -eq "NotArchived" -and
+                    -not [string]::IsNullOrEmpty($_.Url)
+                }
+            } -Operation "Get-PnPTenantSite (OneDrive sites only)"
+        }
+        else {
+            Write-Host "  Mode: SharePoint sites only (OneDrive excluded)" -ForegroundColor Cyan
+            Write-InfoLog -LogName $Log -LogEntryText "GetOneDriveInfo=`$false: retrieving SharePoint sites, skipping OneDrive"
+            $sites = Invoke-WithThrottleHandling -ScriptBlock {
+                Get-PnPTenantSite -IncludeOneDriveSites:$false | Where-Object {
+                    $_.Template -notmatch "SRCHCEN|MYSITE|APPCATALOG|PWS|POINTPUBLISHINGTOPIC|SPSMSITEHOST|EHS|REVIEWCTR|TENANTADMIN" -and
+                    $_.Status -eq "Active" -and
+                    $_.ArchiveStatus -eq "NotArchived" -and
+                    -not [string]::IsNullOrEmpty($_.Url)
+                }
+            } -Operation "Get-PnPTenantSite with optimized filtering"
+        }
         
         Write-Host "Found $($sites.Count) sites for processing after filtering." -ForegroundColor Green
         Write-InfoLog -LogName $log -LogEntryText "Retrieved and filtered to $($sites.Count) sites for processing."
@@ -500,6 +695,9 @@ else {
 # Initialize a hashtable to store site collection data (keyed by URL)
 # ----------------------------------------------
 $siteCollectionData = @{}
+
+# Cache for geo location -> validated Graph Search region (avoids re-probing the same geo)
+$geoRegionCache = @{}
 
 # ----------------------------------------------
 # Initialize the sharing links output file with headers
@@ -535,6 +733,7 @@ Function Update-SiteCollectionData {
             "SharingCapability"       = $SiteProperties.SharingCapability
             "IsTeamsConnected"        = $SiteProperties.IsTeamsConnected
             "LastContentModifiedDate" = $SiteProperties.LastContentModifiedDate
+            "GeoLocation"             = $SiteProperties.GeoLocation
             # Site-specific lists
             "SP Groups On Site"       = [System.Collections.Generic.List[string]]::new()
             "SP Users"                = [System.Collections.Generic.List[PSObject]]::new()
@@ -653,9 +852,9 @@ Function Write-SiteSharingLinks {
                 }) -join ';'
             }
             else {
-                # Check if the file was not searchable to provide better context for empty member lists
-                if ($searchStatus -eq "Not Found in Search") {
-                    "Not Searchable"
+                # Check if the file was not locatable to provide better context for empty member lists
+                if ($searchStatus -eq "File Not Found") {
+                    "File Not Found"
                 }
                 elseif ($searchStatus -eq "Search Error") {
                     "Search Error"
@@ -693,7 +892,7 @@ Function Write-SiteSharingLinks {
             
             # Extract filename from the document URL
             $filename = "Not found"
-            if ($documentUrl -ne "Not found" -and $documentUrl -ne "Not Searchable" -and $documentUrl -ne "Search Error" -and -not [string]::IsNullOrWhiteSpace($documentUrl)) {
+            if ($documentUrl -ne "Not found" -and $documentUrl -ne "File Not Found" -and $documentUrl -ne "Search Error" -and -not [string]::IsNullOrWhiteSpace($documentUrl)) {
                 try {
                     if ($documentUrl -match "DispForm\.aspx\?ID=(\d+)") {
                         # This is a list item - try to get a meaningful name
@@ -722,8 +921,8 @@ Function Write-SiteSharingLinks {
                     $filename = "Extraction Error"
                 }
             }
-            elseif ($documentUrl -eq "Not Searchable") {
-                $filename = "Not Searchable"
+            elseif ($documentUrl -eq "File Not Found") {
+                $filename = "File Not Found"
             }
             elseif ($documentUrl -eq "Search Error") {
                 $filename = "Search Error"
@@ -1751,7 +1950,7 @@ Function Search-DocumentViaGraphAPI {
                 @{
                     entityTypes               = @("driveItem")
                     query                     = @{
-                        queryString = "UniqueID:$DocumentId"
+                        queryString = "`"$DocumentId`""
                     }
                     from                      = 0
                     size                      = 25
@@ -1818,7 +2017,7 @@ Function Search-DocumentViaGraphAPI {
                     @{
                         entityTypes               = @("listItem")
                         query                     = @{
-                            queryString = "UniqueID:$DocumentId"
+                            queryString = "`"$DocumentId`""
                         }
                         from                      = 0
                         size                      = 25
@@ -1883,6 +2082,214 @@ Function Search-DocumentViaGraphAPI {
         Write-ErrorLog -LogName $Log -LogEntryText "$LogContext - Error searching for document via Graph API: $_"
     }
     
+    return $result
+}
+
+# ----------------------------------------------
+# Function to retrieve document properties directly via SharePoint REST API
+# Used as a fallback when Graph search has not yet indexed the document.
+# Only the document UniqueId (GUID from the sharing group name) is required.
+# Tries GetFileById first (document library files), then SP REST search, then GetListItemByUniqueId (list items/pages).
+# ----------------------------------------------
+Function Get-DocumentPropertiesByUniqueId {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $SiteUrl,
+        [Parameter(Mandatory = $true)]
+        [string] $DocumentId,
+        [Parameter(Mandatory = $false)]
+        [string] $GroupDescription = "",
+        [Parameter(Mandatory = $false)]
+        [string] $LogContext = "Document lookup"
+    )
+
+    $result = @{
+        Found         = $false
+        DocumentUrl   = ""
+        DocumentOwner = ""
+        ItemType      = ""
+    }
+
+    try {
+        Write-DebugLog -LogName $Log -LogEntryText "$LogContext - REST fallback for document ID: $DocumentId on $SiteUrl"
+
+        # Extract tenant root URL (e.g. https://contoso.sharepoint.com) for full URL construction
+        $uri = [System.Uri]$SiteUrl
+        $tenantRoot = "$($uri.Scheme)://$($uri.Host)"
+
+        # --- Attempt 1: GetFileById (document library files) ---
+        # A 404/FileNotFound response is expected and normal when the item is a list item.
+        try {
+            $getFileUrl = "/_api/web/GetFileById('$DocumentId')?`$select=ServerRelativeUrl,Author/Title,Author/Email&`$expand=Author"
+            $fileResponse = Invoke-PnPSPRestMethod -Method Get -Url $getFileUrl -ErrorAction Stop
+
+            if ($fileResponse -and -not [string]::IsNullOrWhiteSpace($fileResponse.ServerRelativeUrl)) {
+                $result.Found = $true
+                $result.ItemType = "driveItem"
+                $result.DocumentUrl = $tenantRoot + $fileResponse.ServerRelativeUrl
+
+                if ($fileResponse.Author) {
+                    $authorEmail = $fileResponse.Author.Email
+                    $result.DocumentOwner = if (-not [string]::IsNullOrWhiteSpace($authorEmail)) {
+                        "$($fileResponse.Author.Title) <$authorEmail>"
+                    }
+                    else { $fileResponse.Author.Title }
+                }
+                Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Found via GetFileById REST: $($result.DocumentUrl)"
+                return $result
+            }
+        }
+        catch {
+            Write-DebugLog -LogName $Log -LogEntryText "$LogContext - GetFileById failed (may be a list item): $_"
+        }
+
+        # --- Attempt 2: SharePoint REST search API (site-scoped) ---
+        # Graph search can be blocked by tenant search-restriction settings.
+        # The SharePoint REST search endpoint runs under the PnP certificate connection and is not
+        # subject to the same Graph-level restrictions, so it can reach items that Graph missed.
+        # NOTE: Invoke-PnPSPRestMethod returns OData verbose JSON where arrays are wrapped in
+        # { "results": [...] }. We must unwrap via .results before iterating.
+        try {
+            $spSearchUrl = "/_api/search/query?querytext='%22$DocumentId%22'&SelectProperties='Title,Path,DefaultEncodingURL,AuthorOWSUSER,FileExtension,UniqueID'&RowLimit=5&TrimDuplicates=false"
+            $spSearchResponse = Invoke-PnPSPRestMethod -Method Get -Url $spSearchUrl -ErrorAction Stop
+
+            $searchRows = $null
+            $primaryResult = $spSearchResponse.PrimaryQueryResult
+            if ($primaryResult) {
+                $relevantResults = $primaryResult.RelevantResults
+                if ($relevantResults) {
+                    $table = $relevantResults.Table
+                    if ($table) {
+                        $rawRows = $table.Rows
+                        $searchRows = if ($rawRows.results) { $rawRows.results } else { $rawRows }
+                    }
+                }
+            }
+
+            if ($searchRows -and $searchRows.Count -gt 0) {
+                $rawCells = $searchRows[0].Cells
+                $cells = if ($rawCells.results) { $rawCells.results } else { $rawCells }
+
+                $itemPath = ($cells | Where-Object { $_.Key -eq "Path" } | Select-Object -First 1).Value
+                $itemDefaultEncodingUrl = ($cells | Where-Object { $_.Key -eq "DefaultEncodingURL" } | Select-Object -First 1).Value
+                $authorField = ($cells | Where-Object { $_.Key -eq "AuthorOWSUSER" } | Select-Object -First 1).Value
+
+                Write-DebugLog -LogName $Log -LogEntryText "$LogContext - SP REST search returned $($searchRows.Count) row(s). Path='$itemPath', EncodingURL='$itemDefaultEncodingUrl'"
+
+                $resolvedUrl = if (-not [string]::IsNullOrWhiteSpace($itemDefaultEncodingUrl)) {
+                    $itemDefaultEncodingUrl
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace($itemPath)) {
+                    $itemPath
+                }
+                else { "" }
+
+                if (-not [string]::IsNullOrWhiteSpace($resolvedUrl)) {
+                    $result.Found = $true
+                    $result.ItemType = "listItem"
+                    $result.DocumentUrl = $resolvedUrl
+
+                    # AuthorOWSUSER format: "id | Display Name | email"
+                    if (-not [string]::IsNullOrWhiteSpace($authorField)) {
+                        $authorParts = $authorField -split '\s*\|\s*'
+                        $authorName = if ($authorParts.Count -ge 2) { $authorParts[1].Trim() } else { $authorField }
+                        $authorEmail = if ($authorParts.Count -ge 3) { $authorParts[2].Trim() } else { "" }
+                        $result.DocumentOwner = if (-not [string]::IsNullOrWhiteSpace($authorEmail)) {
+                            "$authorName <$authorEmail>"
+                        }
+                        else { $authorName }
+                    }
+                    Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Found via SP REST search: $resolvedUrl"
+                    return $result
+                }
+            }
+            else {
+                Write-DebugLog -LogName $Log -LogEntryText "$LogContext - SP REST search returned no rows for ID: $DocumentId"
+            }
+        }
+        catch {
+            Write-DebugLog -LogName $Log -LogEntryText "$LogContext - SP REST search failed: $_"
+        }
+
+        # --- Attempt 3: GetListItemByUniqueId (list items / wiki pages) ---
+        try {
+            $getListItemUrl = "/_api/web/GetListItemByUniqueId('$DocumentId')?`$select=EncodedAbsUrl,FileRef,Author/Title,Author/EMail&`$expand=Author"
+            $listItemResponse = Invoke-PnPSPRestMethod -Method Get -Url $getListItemUrl -ErrorAction Stop
+
+            if ($listItemResponse) {
+                $itemUrl = if (-not [string]::IsNullOrWhiteSpace($listItemResponse.EncodedAbsUrl)) {
+                    $listItemResponse.EncodedAbsUrl
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace($listItemResponse.FileRef)) {
+                    $tenantRoot + $listItemResponse.FileRef
+                }
+                else { "" }
+
+                if (-not [string]::IsNullOrWhiteSpace($itemUrl)) {
+                    $result.Found = $true
+                    $result.ItemType = "listItem"
+                    $result.DocumentUrl = $itemUrl
+
+                    if ($listItemResponse.Author) {
+                        $authorEmail = $listItemResponse.Author.EMail
+                        $result.DocumentOwner = if (-not [string]::IsNullOrWhiteSpace($authorEmail)) {
+                            "$($listItemResponse.Author.Title) <$authorEmail>"
+                        }
+                        else { $listItemResponse.Author.Title }
+                    }
+                    Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Found via GetListItemByUniqueId REST: $($result.DocumentUrl)"
+                    return $result
+                }
+            }
+        }
+        catch {
+            Write-DebugLog -LogName $Log -LogEntryText "$LogContext - GetListItemByUniqueId failed: $_"
+        }
+
+        # --- Attempt 4: Use the SharingLinks group Description as a server-relative path ---
+        # SharePoint sets the Description of SharingLinks.* groups to the server-relative path of
+        # the shared item. This works even when the search index is stale, as long as the file exists.
+        if (-not [string]::IsNullOrWhiteSpace($GroupDescription)) {
+            $descPath = $GroupDescription.Trim()
+            Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Trying group description as path: '$descPath'"
+
+            # Normalise: strip any absolute prefix so we always have a server-relative path
+            if ($descPath -match "^https?://[^/]+(/.+)$") { $descPath = $matches[1] }
+
+            if ($descPath -match "^/") {
+                try {
+                    $encodedPath = $descPath.Replace("'", "''")  # escape single quotes for OData
+                    $byPathUrl = "/_api/web/GetFileByServerRelativePath(decodedurl='$encodedPath')?`$select=ServerRelativeUrl,Author/Title,Author/Email&`$expand=Author"
+                    $pathResponse = Invoke-PnPSPRestMethod -Method Get -Url $byPathUrl -ErrorAction Stop
+
+                    if ($pathResponse -and -not [string]::IsNullOrWhiteSpace($pathResponse.ServerRelativeUrl)) {
+                        $result.Found = $true
+                        $result.ItemType = "driveItem"
+                        $result.DocumentUrl = $tenantRoot + $pathResponse.ServerRelativeUrl
+
+                        if ($pathResponse.Author) {
+                            $authorEmail = $pathResponse.Author.Email
+                            $result.DocumentOwner = if (-not [string]::IsNullOrWhiteSpace($authorEmail)) {
+                                "$($pathResponse.Author.Title) <$authorEmail>"
+                            }
+                            else { $pathResponse.Author.Title }
+                        }
+                        Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Found via group Description path: $($result.DocumentUrl)"
+                        return $result
+                    }
+                }
+                catch {
+                    Write-DebugLog -LogName $Log -LogEntryText "$LogContext - Group description path lookup failed: $_"
+                }
+            }
+        }
+
+        Write-DebugLog -LogName $Log -LogEntryText "$LogContext - All fallbacks exhausted; document not found for ID: $DocumentId"
+    }
+    catch {
+        Write-ErrorLog -LogName $Log -LogEntryText "$LogContext - Unexpected error in REST fallback for document ID $DocumentId : $_"
+    }
+
     return $result
 }
 
@@ -2168,14 +2575,30 @@ foreach ($site in $sites) {
         try {
             Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
             
-            # Get Site Properties using SharePoint Admin connection
-            Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop
-            $siteProperties = Invoke-WithThrottleHandling -ScriptBlock {
-                Get-PnPTenantSite -Identity $siteUrl
-            } -Operation "Get site properties for $siteUrl"
+            # Get site properties via Admin connection
+            # Wrapped in its own try/catch so that a transient admin-center connectivity failure
+            # (e.g. DNS resolution error for <tenant>-admin.sharepoint.com) produces a clear,
+            # targeted message and explicitly skips this site — rather than falling through to the
+            # generic outer catch.
+            try {
+                Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop
+                $siteProperties = Invoke-WithThrottleHandling -ScriptBlock {
+                    Get-PnPTenantSite -Identity $siteUrl
+                } -Operation "Get site properties for $siteUrl"
+            }
+            catch {
+                Write-Host "  Skipping site — could not retrieve site properties from admin center ($adminUrl): $_" -ForegroundColor DarkYellow
+                Write-ErrorLog -LogName $Log -LogEntryText "Skipping site $siteUrl — admin center connectivity failure when retrieving site properties: $_"
+                continue
+            }
             
             # Connect back to the site for group processing
             Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
+
+            # Resolve the Graph Search region for this site's geo location (multi-geo aware).
+            # For non-multi-geo tenants, GeoLocation is empty and Get-SiteSearchRegion returns $searchRegion.
+            $siteSearchRegion = Get-SiteSearchRegion -GeoLocation $siteProperties.GeoLocation
+            Write-DebugLog -LogName $Log -LogEntryText "Site '$siteUrl' geo='$($siteProperties.GeoLocation)' -> search region='$siteSearchRegion'"
             
             # Initialize site data
             Update-SiteCollectionData -SiteUrl $siteUrl -SiteProperties $siteProperties
@@ -2312,52 +2735,69 @@ foreach ($site in $sites) {
                                 } -Operation "Get Graph access token (version-compatible) for document search"
                                 
                                 if ($graphToken) {
-                                    $headers = @{
-                                        "Authorization" = "Bearer $graphToken"
-                                        "Content-Type"  = "application/json"
-                                    }
-                                    
                                     # Try to find the document via Microsoft Graph search using the document ID
-                                    $searchResult = Search-DocumentViaGraphAPI -DocumentId $documentId -SearchRegion $searchRegion -LogContext "Main processing loop - document search"
+                                    $searchResult = Search-DocumentViaGraphAPI -DocumentId $documentId -SearchRegion $siteSearchRegion -LogContext "Main processing loop - document search"
                                     
                                     Write-DebugLog -LogName $Log -LogEntryText "Search result for document ID $documentId - Found: $($searchResult.Found), URL: '$($searchResult.DocumentUrl)', Owner: '$($searchResult.DocumentOwner)', Type: '$($searchResult.ItemType)'"
                                     
                                     if ($searchResult.Found) {
                                         $searchStatus = "Found"
-                                        if ($searchResult.DocumentUrl) {
-                                            $documentUrl = $searchResult.DocumentUrl
-                                        }
-                                        
-                                        if ($searchResult.DocumentOwner) {
-                                            $documentOwner = $searchResult.DocumentOwner
-                                        }
-                                        
-                                        if ($searchResult.ItemType) {
-                                            $documentItemType = $searchResult.ItemType
-                                        }
+                                        if ($searchResult.DocumentUrl) { $documentUrl = $searchResult.DocumentUrl }
+                                        if ($searchResult.DocumentOwner) { $documentOwner = $searchResult.DocumentOwner }
+                                        if ($searchResult.ItemType) { $documentItemType = $searchResult.ItemType }
                                     }
                                     else {
-                                        $searchStatus = "Not Found in Search"
-                                        # Set default values to indicate the file was not searchable
-                                        $documentUrl = "Not Searchable"
-                                        $documentOwner = "Not Searchable"
-                                        $documentItemType = "Not Searchable"
+                                        # Document not in Graph search index — try SharePoint REST API fallback
+                                        Write-DebugLog -LogName $Log -LogEntryText "Document not in Graph search — attempting REST fallback for ID: $documentId"
+                                        $restResult = Get-DocumentPropertiesByUniqueId -SiteUrl $siteUrl -DocumentId $documentId -GroupDescription $spGroup.Description -LogContext "Main loop - REST fallback"
+                                        if ($restResult.Found) {
+                                            $searchStatus = "Found (REST Fallback)"
+                                            $documentUrl = $restResult.DocumentUrl
+                                            $documentOwner = $restResult.DocumentOwner
+                                            $documentItemType = $restResult.ItemType
+                                        }
+                                        else {
+                                            $searchStatus = "File Not Found"
+                                            $documentUrl = "File Not Found"
+                                            $documentOwner = "File Not Found"
+                                            $documentItemType = "File Not Found"
+                                        }
                                     }
                                 }
                                 else {
-                                    Write-LogEntry -LogName $Log -LogEntryText "Unable to get Graph access token for document search." -Level "ERROR"
+                                    Write-ErrorLog -LogName $Log -LogEntryText "Unable to get Graph access token for document search."
+                                    # Graph token unavailable — REST fallback uses PnP certificate auth, not Graph token
+                                    $restResult = Get-DocumentPropertiesByUniqueId -SiteUrl $siteUrl -DocumentId $documentId -GroupDescription $spGroup.Description -LogContext "Main loop - REST fallback (no Graph token)"
+                                    if ($restResult.Found) {
+                                        $searchStatus = "Found (REST Fallback)"
+                                        $documentUrl = $restResult.DocumentUrl
+                                        $documentOwner = $restResult.DocumentOwner
+                                        $documentItemType = $restResult.ItemType
+                                    }
+                                    else {
+                                        $searchStatus = "Search Error"
+                                        $documentUrl = "Search Error"
+                                        $documentOwner = "Search Error"
+                                        $documentItemType = "Search Error"
+                                    }
+                                }
+                            }
+                            catch {
+                                Write-ErrorLog -LogName $Log -LogEntryText "Error searching for document via Graph API: ${_}"
+                                # Graph search threw an exception — try REST fallback
+                                $restResult = Get-DocumentPropertiesByUniqueId -SiteUrl $siteUrl -DocumentId $documentId -GroupDescription $spGroup.Description -LogContext "Main loop - REST fallback after search error"
+                                if ($restResult.Found) {
+                                    $searchStatus = "Found (REST Fallback)"
+                                    $documentUrl = $restResult.DocumentUrl
+                                    $documentOwner = $restResult.DocumentOwner
+                                    $documentItemType = $restResult.ItemType
+                                }
+                                else {
                                     $searchStatus = "Search Error"
                                     $documentUrl = "Search Error"
                                     $documentOwner = "Search Error"
                                     $documentItemType = "Search Error"
                                 }
-                            }
-                            catch {
-                                Write-ErrorLog -LogName $Log -LogEntryText "Error searching for document via Graph API: ${_}"
-                                $searchStatus = "Search Error"
-                                $documentUrl = "Search Error"
-                                $documentOwner = "Search Error"
-                                $documentItemType = "Search Error"
                             }
                             
                             # Store the sharing link information 
