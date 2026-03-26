@@ -63,12 +63,13 @@ Upload or generate a certificate for the app registration and note the **thumbpr
 Open the script and set the variables in the **Set Variables** section at the top:
 
 ```powershell
-$tenantname   = "contoso"                                    # Tenant name (without .onmicrosoft.com)
-$appID        = "00000000-0000-0000-0000-000000000000"       # Entra App (client) ID
-$thumbprint   = "AABBCCDDEEFF..."                            # Certificate thumbprint
-$tenant       = "00000000-0000-0000-0000-000000000000"       # Tenant ID (GUID)
-$searchRegion = "NAM"                                        # Graph search region: NAM, EUR, APC, etc.
-$debugLogging = $false                                       # Set $true for verbose debug logging
+$tenantname      = "contoso"                                    # Tenant name (without .onmicrosoft.com)
+$appID           = "00000000-0000-0000-0000-000000000000"       # Entra App (client) ID
+$thumbprint      = "AABBCCDDEEFF..."                            # Certificate thumbprint
+$tenant          = "00000000-0000-0000-0000-000000000000"       # Tenant ID (GUID)
+$searchRegion    = ""                                           # Leave empty to auto-detect, or set explicitly: NAM, EUR, APC, GBR, CAN, IND, AUS, etc.
+$debugLogging    = $false                                       # Set $true for verbose debug logging
+$GetOneDriveInfo = $false                                       # Set $true to scan OneDrive sites ONLY; $false scans SharePoint and skips OneDrive
 ```
 
 ### Optional: Target specific sites
@@ -80,6 +81,16 @@ $inputfile = "C:\temp\sites.csv"
 ```
 
 The CSV can be a plain list of URLs (no header) or include a `URL` header column. If `$inputfile` is empty, all active non-archived sites in the tenant are scanned.
+
+### OneDrive for Business sites
+
+By default (`$GetOneDriveInfo = $false`) the script scans **SharePoint sites only** and skips all OneDrive for Business personal sites. Since a significant volume of external OTP sharing also occurs on OneDrive, you can flip this flag to target OneDrive instead:
+
+```powershell
+$GetOneDriveInfo = $true   # Scan OneDrive personal sites ONLY (skips all SharePoint sites)
+```
+
+Run the script twice — once with `$false` for SharePoint sites and once with `$true` for OneDrive sites — to get a complete tenant-wide picture.
 
 ---
 
@@ -123,7 +134,7 @@ Contains one row per Flexible sharing link that has at least one confirmed exter
 | Last Content Modified | Last modification date of the site content |
 | Search Status | How the file was located (see values below) |
 | Has External OTP Users | `True` for all rows in this report |
-| External OTP Users | Semicolon-separated list of external user emails; `[OTP Confirmed]` suffix means the user was verified in the site's User Information List |
+| External OTP Users | Semicolon-separated list of external user emails confirmed as OTP users via the site's User Information List |
 | OTP Confirmed | `True` if at least one user was verified via the User Information List |
 
 #### Search Status values
@@ -179,4 +190,4 @@ The sample scripts are provided **AS IS** without warranty of any kind. Microsof
 
 ---
 
-*Author: Mike Lee | Updated: March 2026 | MC1243549 – SharePoint OTP Retirement Impact Assessment*
+*Author: Mike Lee | Updated: March 26, 2026 | MC1243549 – SharePoint OTP Retirement Impact Assessment*
