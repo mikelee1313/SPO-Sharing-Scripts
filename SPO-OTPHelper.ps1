@@ -1594,10 +1594,22 @@ foreach ($site in $sites) {
             Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
 
             # Get site properties via Admin connection
-            Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop
-            $siteProperties = Invoke-WithThrottleHandling -ScriptBlock {
-                Get-PnPTenantSite -Identity $siteUrl
-            } -Operation "Get site properties for $siteUrl"
+            # Wrapped in its own try/catch so that a transient admin-center connectivity failure
+            # (e.g. DNS resolution error for <tenant>-admin.sharepoint.com) produces a clear,
+            # targeted message and explicitly skips this site — rather than falling through to the
+            # generic outer catch, which can make it look like the admin URL is being treated as
+            # the site URL.
+            try {
+                Connect-PnPOnline -Url $adminUrl @connectionParams -ErrorAction Stop
+                $siteProperties = Invoke-WithThrottleHandling -ScriptBlock {
+                    Get-PnPTenantSite -Identity $siteUrl
+                } -Operation "Get site properties for $siteUrl"
+            }
+            catch {
+                Write-Host "  Skipping site — could not retrieve site properties from admin center ($adminUrl): $_" -ForegroundColor DarkYellow
+                Write-ErrorLog -LogName $Log -LogEntryText "Skipping site $siteUrl — admin center connectivity failure when retrieving site properties: $_"
+                continue
+            }
 
             # Reconnect to the site for group processing
             Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
