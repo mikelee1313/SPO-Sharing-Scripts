@@ -90,6 +90,7 @@
     Created: 3/24/2026
     Updated: 3/25/2026 - added multi-geo Graph Search region detection and handling
     Updated: 3/26/2026 - added support for scanning OneDrive Sites (optional parameter)
+    Updated: 3/30/2026 - added recursive subsite scanning (Get-PnPSubWeb -Recurse) so OTP sharing links in subsites are detected
     Purpose: MC1243549 - Retirement of SharePoint One-Time Passcode (SPO OTP) and transition
              to Microsoft Entra B2B guest accounts. Run this script to identify Flexible sharing
              links that expose OTP users, so admins can assess the retirement impact.
@@ -1820,6 +1821,230 @@ foreach ($site in $sites) {
 
                 # Write sharing links data for this site (Flexible only)
                 Write-SiteSharingLinks -SiteUrl $siteUrl -SiteData $siteCollectionData[$siteUrl]
+            }
+
+            # -------------------------------------------------------
+            # Subsite scanning - customers frequently store OTP-shared
+            # content in subsites, so each subsite is processed using
+            # the same pipeline as the root site.
+            # -------------------------------------------------------
+            try {
+                Connect-PnPOnline -Url $siteUrl @connectionParams -ErrorAction Stop
+                $subWebs = Invoke-WithThrottleHandling -ScriptBlock {
+                    Get-PnPSubWeb -Recurse -ErrorAction SilentlyContinue
+                } -Operation "Get subsites for $siteUrl"
+
+                if ($subWebs -and $subWebs.Count -gt 0) {
+                    Write-Host "  Found $($subWebs.Count) subsite(s) under $siteUrl — scanning each for OTP sharing links" -ForegroundColor Cyan
+                    Write-InfoLog -LogName $Log -LogEntryText "Found $($subWebs.Count) subsite(s) under $siteUrl"
+
+                    foreach ($subWeb in $subWebs) {
+                        $subUrl = $subWeb.Url
+                        if ([string]::IsNullOrWhiteSpace($subUrl)) { continue }
+
+                        Write-Host "    Scanning subsite: $subUrl" -ForegroundColor Yellow
+                        Write-InfoLog -LogName $Log -LogEntryText "Scanning subsite: $subUrl"
+
+                        try {
+                            Connect-PnPOnline -Url $subUrl @connectionParams -ErrorAction Stop
+
+                            # Reuse the same site properties from the parent site collection
+                            # (subsites share the same admin-visible properties; IB, template, etc.)
+                            Update-SiteCollectionData -SiteUrl $subUrl -SiteProperties $siteProperties
+
+                            $subGroups = Invoke-WithThrottleHandling -ScriptBlock {
+                                Get-PnPGroup -Includes Description
+                            } -Operation "Get groups for subsite $subUrl"
+
+                            foreach ($spGroup in $subGroups) {
+                                $spGroupName = $spGroup.Title
+
+                                Update-SiteCollectionData -SiteUrl $subUrl -SiteProperties $siteProperties -SPGroupName $spGroupName
+
+                                $spUsers = Invoke-WithThrottleHandling -ScriptBlock {
+                                    $standardUsers = Get-PnPGroupMember -Identity $spGroup.Id -ErrorAction SilentlyContinue
+
+                                    if ($spGroupName -like "SharingLinks*") {
+                                        try {
+                                            $ctx = Get-PnPContext
+                                            $group = $ctx.Web.SiteGroups.GetById($spGroup.Id)
+                                            $users = $group.Users
+                                            $ctx.Load($users)
+                                            $ctx.ExecuteQuery()
+
+                                            $csomUsers = @()
+                                            foreach ($user in $users) {
+                                                $csomUsers += [PSCustomObject]@{
+                                                    Id            = $user.Id
+                                                    LoginName     = $user.LoginName
+                                                    Title         = $user.Title
+                                                    Email         = $user.Email
+                                                    PrincipalType = $user.PrincipalType
+                                                }
+                                            }
+                                            $allUsers = @($standardUsers) + @($csomUsers) | Group-Object LoginName | ForEach-Object { $_.Group[0] }
+                                            Write-DebugLog -LogName $Log -LogEntryText "Subsite group '$spGroupName': Standard=$($standardUsers.Count), CSOM=$($csomUsers.Count), Combined=$($allUsers.Count)"
+                                            return $allUsers
+                                        }
+                                        catch {
+                                            Write-DebugLog -LogName $Log -LogEntryText "CSOM fallback failed for subsite group '$spGroupName': $_. Using standard results."
+                                            return $standardUsers
+                                        }
+                                    }
+                                    else {
+                                        return $standardUsers
+                                    }
+                                } -Operation "Get members for subsite group $spGroupName"
+
+                                foreach ($spUser in $spUsers) {
+                                    $hasValidLoginName = -not [string]::IsNullOrWhiteSpace($spUser.LoginName)
+                                    $hasValidId = $spUser.Id -ne $null -and $spUser.Id -gt 0
+
+                                    if ($spUser -and ($hasValidLoginName -or $hasValidId)) {
+                                        $userIdentifier = if (-not [string]::IsNullOrWhiteSpace($spUser.LoginName)) {
+                                            $spUser.LoginName
+                                        }
+                                        elseif (-not [string]::IsNullOrWhiteSpace($spUser.Title)) {
+                                            $spUser.Title
+                                        }
+                                        else {
+                                            "User_$($spUser.Id)"
+                                        }
+                                        Update-SiteCollectionData -SiteUrl $subUrl -SiteProperties $siteProperties -AssociatedSPGroup $spGroupName -SPUserName $userIdentifier -SPUserTitle $spUser.Title -SPUserEmail $spUser.Email
+                                    }
+                                }
+
+                                # Extract document information from sharing groups
+                                if ($spGroupName -like "SharingLinks*") {
+                                    try {
+                                        if ($spGroupName -match "SharingLinks\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.") {
+                                            $documentId = $matches[1]
+                                            $sharingType = "Unknown"
+                                            $documentUrl = ""
+                                            $documentOwner = ""
+                                            $documentItemType = ""
+                                            $searchStatus = "Not Searched"
+
+                                            if ($spGroupName -like "*OrganizationView*") { $sharingType = "OrganizationView" }
+                                            elseif ($spGroupName -like "*OrganizationEdit*") { $sharingType = "OrganizationEdit" }
+                                            elseif ($spGroupName -like "*AnonymousAccess*") { $sharingType = "AnonymousAccess" }
+
+                                            try {
+                                                $graphToken = Invoke-WithThrottleHandling -ScriptBlock {
+                                                    Get-PnPGraphTokenCompatible
+                                                } -Operation "Get Graph access token for subsite document search"
+
+                                                if ($graphToken) {
+                                                    $searchResult = Search-DocumentViaGraphAPI -DocumentId $documentId -SearchRegion $siteSearchRegion -LogContext "Subsite - document search"
+
+                                                    if ($searchResult.Found) {
+                                                        $searchStatus = "Found"
+                                                        $documentUrl = $searchResult.DocumentUrl
+                                                        $documentOwner = $searchResult.DocumentOwner
+                                                        $documentItemType = $searchResult.ItemType
+                                                    }
+                                                    else {
+                                                        Write-DebugLog -LogName $Log -LogEntryText "Subsite document not in search index - attempting REST fallback for ID: $documentId"
+                                                        $restResult = Get-DocumentPropertiesByUniqueId -SiteUrl $subUrl -DocumentId $documentId -GroupDescription $spGroup.Description -LogContext "Subsite - REST fallback"
+                                                        if ($restResult.Found) {
+                                                            $searchStatus = "Found (REST Fallback)"
+                                                            $documentUrl = $restResult.DocumentUrl
+                                                            $documentOwner = $restResult.DocumentOwner
+                                                            $documentItemType = $restResult.ItemType
+                                                        }
+                                                        else {
+                                                            $searchStatus = "File Not Found"
+                                                            $documentUrl = "File Not Found"
+                                                            $documentOwner = "File Not Found"
+                                                            $documentItemType = "File Not Found"
+                                                        }
+                                                    }
+                                                }
+                                                else {
+                                                    Write-ErrorLog -LogName $Log -LogEntryText "Unable to get Graph access token for subsite document search."
+                                                    $restResult = Get-DocumentPropertiesByUniqueId -SiteUrl $subUrl -DocumentId $documentId -GroupDescription $spGroup.Description -LogContext "Subsite - REST fallback (no Graph token)"
+                                                    if ($restResult.Found) {
+                                                        $searchStatus = "Found (REST Fallback)"
+                                                        $documentUrl = $restResult.DocumentUrl
+                                                        $documentOwner = $restResult.DocumentOwner
+                                                        $documentItemType = $restResult.ItemType
+                                                    }
+                                                    else {
+                                                        $searchStatus = "Search Error"
+                                                        $documentUrl = "Search Error"
+                                                        $documentOwner = "Search Error"
+                                                        $documentItemType = "Search Error"
+                                                    }
+                                                }
+                                            }
+                                            catch {
+                                                Write-ErrorLog -LogName $Log -LogEntryText "Error searching for subsite document via Graph API: ${_}"
+                                                $restResult = Get-DocumentPropertiesByUniqueId -SiteUrl $subUrl -DocumentId $documentId -GroupDescription $spGroup.Description -LogContext "Subsite - REST fallback after search error"
+                                                if ($restResult.Found) {
+                                                    $searchStatus = "Found (REST Fallback)"
+                                                    $documentUrl = $restResult.DocumentUrl
+                                                    $documentOwner = $restResult.DocumentOwner
+                                                    $documentItemType = $restResult.ItemType
+                                                }
+                                                else {
+                                                    $searchStatus = "Search Error"
+                                                    $documentUrl = "Search Error"
+                                                    $documentOwner = "Search Error"
+                                                    $documentItemType = "Search Error"
+                                                }
+                                            }
+
+                                            if (-not $siteCollectionData[$subUrl].ContainsKey("DocumentDetails")) {
+                                                $siteCollectionData[$subUrl]["DocumentDetails"] = @{}
+                                            }
+
+                                            $siteCollectionData[$subUrl]["DocumentDetails"][$spGroupName] = @{
+                                                "DocumentId"       = $documentId
+                                                "SharingType"      = $sharingType
+                                                "DocumentUrl"      = $documentUrl
+                                                "DocumentOwner"    = $documentOwner
+                                                "DocumentItemType" = $documentItemType
+                                                "SearchStatus"     = $searchStatus
+                                                "SharedOn"         = $subUrl
+                                                "SharingLinkUrl"   = ""
+                                                "ExpirationDate"   = ""
+                                            }
+                                        }
+                                    }
+                                    catch {
+                                        Write-ErrorLog -LogName $Log -LogEntryText "Error extracting document ID from subsite group name $($spGroupName) : ${_}"
+                                    }
+                                }
+                            }
+
+                            # Process sharing links for subsite
+                            if ($siteCollectionData[$subUrl]["Has Sharing Links"]) {
+                                $sitesWithSharingLinksCount++
+
+                                Get-SharingLinkUrls -SiteUrl $subUrl
+                                Find-FlexibleLinkOTPUsers -SiteUrl $subUrl
+
+                                if ($siteCollectionData[$subUrl].ContainsKey("OTP Detection")) {
+                                    $subHasOTP = $siteCollectionData[$subUrl]["OTP Detection"].Values |
+                                    Where-Object { $_ -is [hashtable] -and $_.HasExternalOTPUsers -eq $true }
+                                    if ($subHasOTP) { $sitesWithOTPUsersCount++ }
+                                }
+
+                                Write-SiteSharingLinks -SiteUrl $subUrl -SiteData $siteCollectionData[$subUrl]
+                            }
+                        }
+                        catch {
+                            Write-Host "    Error processing subsite $subUrl : $_" -ForegroundColor Red
+                            Write-ErrorLog -LogName $Log -LogEntryText "Error processing subsite $subUrl : $_"
+                        }
+                    }
+                }
+                else {
+                    Write-DebugLog -LogName $Log -LogEntryText "No subsites found under $siteUrl"
+                }
+            }
+            catch {
+                Write-DebugLog -LogName $Log -LogEntryText "Could not enumerate subsites for $siteUrl : $_"
             }
         }
         catch {
