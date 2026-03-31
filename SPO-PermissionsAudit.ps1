@@ -42,7 +42,8 @@
 .NOTES
     Author  : Mike Lee / Mariel Williams
     Created : 3/27/2026
-    Version : 1.0
+    Updated : 3/31/2026 - added retry logic for EXO throttling, improved output formatting, and added checkpointing for long runs
+    Version : 1.1
 #>
 
 [CmdletBinding()]
@@ -129,15 +130,30 @@ function Get-AuditEventsForSite {
     Write-Verbose "  Querying UAL for: $SiteUrl"
 
     do {
-        $results = Search-UnifiedAuditLog `
-            -StartDate       $Start `
-            -EndDate         $End `
-            -Operations      $Operations `
-            -ObjectIds       "$SiteUrl*" `
-            -SessionId       $sessionId `
-            -SessionCommand  ReturnLargeSet `
-            -ResultSize      $PageSize `
-            -ErrorAction     Stop
+        # Retry with exponential back-off to handle EXO throttling
+        $attempt = 0
+        $results = $null
+        do {
+            try {
+                $results = Search-UnifiedAuditLog `
+                    -StartDate       $Start `
+                    -EndDate         $End `
+                    -Operations      $Operations `
+                    -ObjectIds       "$SiteUrl*" `
+                    -SessionId       $sessionId `
+                    -SessionCommand  ReturnLargeSet `
+                    -ResultSize      $PageSize `
+                    -ErrorAction     Stop
+                break  # success - exit retry loop
+            }
+            catch {
+                $attempt++
+                if ($attempt -ge 3) { throw }
+                $delay = [math]::Pow(2, $attempt) * 5  # 10s, 20s
+                Write-Warning "    UAL query failed (attempt $attempt/3), retrying in ${delay}s: $_"
+                Start-Sleep -Seconds $delay
+            }
+        } while ($true)
 
         if ($results) {
             foreach ($r in $results) { $allRecords.Add($r) }
@@ -185,30 +201,32 @@ function ConvertTo-FlatRecord {
         $audit = $null
     }
 
-    $op     = $Record.Operations
+    $op = $Record.Operations
     $action = if ($script:ActionLabels[$op]) { $script:ActionLabels[$op] } else { $op }
 
     # Parse PermissionsGranted and GroupAffected out of the EventData XML blob
     $permGranted = ''
-    $groupName   = ''
+    $groupName = ''
     if ($audit.EventData) {
         if ($audit.EventData -match '<PermissionsGranted>([^<]+)<') { $permGranted = $Matches[1] }
-        if ($audit.EventData -match '<Group>([^<]+)<')              { $groupName   = $Matches[1] }
+        if ($audit.EventData -match '<Group>([^<]+)<') { $groupName = $Matches[1] }
     }
 
     # Relative path: SourceRelativeUrl is cleanest; fall back to stripping the site URL from ObjectId
     $relPath = ''
     if ($audit.SourceRelativeUrl) {
         $relPath = $audit.SourceRelativeUrl
-    } elseif ($audit.ObjectId -and $audit.SiteUrl) {
+    }
+    elseif ($audit.ObjectId -and $audit.SiteUrl) {
         $stripped = $audit.ObjectId -replace [regex]::Escape($audit.SiteUrl.TrimEnd('/')), ''
-        $relPath  = if ($stripped -match '^[/\\]?$') { '(site root)' } else { $stripped.TrimStart('/') }
+        $relPath = if ($stripped -match '^[/\\]?$') { '(site root)' } else { $stripped.TrimStart('/') }
     }
 
     # Clean up target name — internal SharingLinks group names are not meaningful to admins
     $target = if ($audit.TargetUserOrGroupName -match '^SharingLinks\.') {
         '(sharing link group)'
-    } else {
+    }
+    else {
         $audit.TargetUserOrGroupName
     }
 
@@ -221,21 +239,22 @@ function ConvertTo-FlatRecord {
     # Friendly link scope (blank when not applicable)
     $linkScope = if ($audit.SharingLinkScope -and $audit.SharingLinkScope -notin 'Uninitialized', 'None') {
         $audit.SharingLinkScope
-    } else { '' }
+    }
+    else { '' }
 
     [PSCustomObject]@{
-        DateTime          = $Record.CreationDate
-        PerformedBy       = $Record.UserIds
-        Action            = $action
-        ItemType          = $audit.ItemType
-        RelativePath      = $relPath
-        SiteUrl           = $audit.SiteUrl
-        AffectedUser      = $target
+        DateTime           = $Record.CreationDate
+        PerformedBy        = $Record.UserIds
+        Action             = $action
+        ItemType           = $audit.ItemType
+        RelativePath       = $relPath
+        SiteUrl            = $audit.SiteUrl
+        AffectedUser       = $target
         PermissionsGranted = $permGranted
-        GroupAffected     = $groupName
-        LinkScope         = $linkScope
-        ClientIP          = $audit.ClientIP
-        IsSystemEvent     = $isSystem
+        GroupAffected      = $groupName
+        LinkScope          = $linkScope
+        ClientIP           = $audit.ClientIP
+        IsSystemEvent      = $isSystem
     }
 }
 
@@ -260,13 +279,35 @@ Write-Host "  Window   : $($StartDate.ToString('u'))  - >  $($EndDate.ToString('
 Write-Host "  Operations: $($PermissionOperations.Count) event types" -ForegroundColor Cyan
 Write-Host ""
 
-$allResults = [System.Collections.Generic.List[PSObject]]::new()
-$siteIndex = 0
+# Checkpoint file tracks completed sites so the run can resume after a failure
+$checkpointFile = "$OutputPath.checkpoint"
+$completedSites = [System.Collections.Generic.HashSet[string]]::new()
+if (Test-Path $checkpointFile) {
+    Write-Host "  Resuming from checkpoint: $checkpointFile" -ForegroundColor Yellow
+    Get-Content $checkpointFile | Where-Object { $_ -ne '' } | ForEach-Object { $completedSites.Add($_) | Out-Null }
+}
 
-foreach ($site in $sites) {
+$pendingSites = $sites | Where-Object { -not $completedSites.Contains($_) }
+
+if ($completedSites.Count -gt 0) {
+    Write-Host "  Skipping  : $($completedSites.Count) already-processed site(s)" -ForegroundColor DarkGray
+}
+
+$totalWritten = 0
+$totalFiltered = 0
+$siteIndex = $completedSites.Count  # start progress counter from where we left off
+
+foreach ($site in $pendingSites) {
     $siteIndex++
+
+    # Refresh EXO session every 50 sites to prevent token expiry on long runs
+    if (($siteIndex % 50) -eq 0) {
+        Write-Verbose "  Refreshing Exchange Online connection..."
+        Connect-ExchangeOnline -ShowBanner:$false
+    }
+
     Write-Progress -Activity "Querying Unified Audit Log" `
-        -Status    "[$siteIndex/$($sites.Count)] $site" `
+        -Status       "[$siteIndex/$($sites.Count)] $site" `
         -PercentComplete (($siteIndex / $sites.Count) * 100)
 
     try {
@@ -279,13 +320,27 @@ foreach ($site in $sites) {
 
         if ($records -and $records.Count -gt 0) {
             foreach ($rec in $records) {
-                $allResults.Add((ConvertTo-FlatRecord -Record $rec))
+                $flat = ConvertTo-FlatRecord -Record $rec
+                if ($flat.IsSystemEvent -and -not $IncludeSystemEvents) {
+                    $totalFiltered++
+                }
+                else {
+                    $flat |
+                    Select-Object DateTime, PerformedBy, Action, ItemType, RelativePath, SiteUrl,
+                    AffectedUser, PermissionsGranted, GroupAffected, LinkScope, ClientIP |
+                    Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8 -Append
+                    $totalWritten++
+                }
             }
             Write-Host "  [+] $site  -  $($records.Count) event(s)" -ForegroundColor Green
         }
         else {
             Write-Host "  [ ] $site  -  no events found" -ForegroundColor Gray
         }
+
+        # Mark site as done in checkpoint file
+        Add-Content -Path $checkpointFile -Value $site
+        [void]$completedSites.Add($site)
     }
     catch {
         Write-Warning "  [!] Error querying '$site': $_"
@@ -298,51 +353,45 @@ Write-Progress -Activity "Querying Unified Audit Log" -Completed
 
 #region ── Output ───────────────────────────────────────────────────────────────
 
-if ($allResults.Count -eq 0) {
+if ($totalWritten -eq 0) {
     Write-Host "`nNo permission events found across any sites in the specified window." -ForegroundColor Yellow
 }
 else {
-    # Separate system side-effect rows from real permission changes
-    $systemCount = ($allResults | Where-Object IsSystemEvent).Count
-    $exportData  = if ($IncludeSystemEvents) {
-        $allResults
-    } else {
-        $allResults | Where-Object { -not $_.IsSystemEvent }
-    }
-
-    # Drop the IsSystemEvent flag column from the CSV
-    $exportData |
-        Sort-Object DateTime -Descending |
-        Select-Object DateTime, PerformedBy, Action, ItemType, RelativePath, SiteUrl,
-                      AffectedUser, PermissionsGranted, GroupAffected, LinkScope, ClientIP |
-        Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8
-
-    Write-Host "`nResults  : $($exportData.Count) permission change events" -ForegroundColor Cyan
-    if (-not $IncludeSystemEvents -and $systemCount -gt 0) {
-        Write-Host "Filtered : $systemCount internal SPO system-group events suppressed (use -IncludeSystemEvents to include)" -ForegroundColor DarkGray
+    Write-Host "`nResults  : $totalWritten permission change events" -ForegroundColor Cyan
+    if (-not $IncludeSystemEvents -and $totalFiltered -gt 0) {
+        Write-Host "Filtered : $totalFiltered internal SPO system-group events suppressed (use -IncludeSystemEvents to include)" -ForegroundColor DarkGray
     }
     Write-Host "Exported : $OutputPath" -ForegroundColor Green
+
+    # Read back the CSV for summary reporting (avoids holding all records in memory)
+    $exportData = Import-Csv -Path $OutputPath
 
     # Summary by action type
     Write-Host "`n── Events by action ────────────────────────────────────" -ForegroundColor Cyan
     $exportData |
-        Group-Object Action |
-        Sort-Object Count -Descending |
-        Format-Table @{L='Action';E={$_.Name};W=50}, Count -AutoSize
+    Group-Object Action |
+    Sort-Object Count -Descending |
+    Format-Table @{L = 'Action'; E = { $_.Name }; W = 50 }, Count -AutoSize
 
     # Summary by site
     Write-Host "── Events per site ─────────────────────────────────────" -ForegroundColor Cyan
     $exportData |
-        Group-Object SiteUrl |
-        Sort-Object Count -Descending |
-        Format-Table @{L='SiteUrl';E={$_.Name};W=60}, Count -AutoSize
+    Group-Object SiteUrl |
+    Sort-Object Count -Descending |
+    Format-Table @{L = 'SiteUrl'; E = { $_.Name }; W = 60 }, Count -AutoSize
 
     # Who performed changes
     Write-Host "── Changes by user ─────────────────────────────────────" -ForegroundColor Cyan
     $exportData |
-        Group-Object PerformedBy |
-        Sort-Object Count -Descending |
-        Format-Table @{L='PerformedBy';E={$_.Name};W=50}, Count -AutoSize
+    Group-Object PerformedBy |
+    Sort-Object Count -Descending |
+    Format-Table @{L = 'PerformedBy'; E = { $_.Name }; W = 50 }, Count -AutoSize
+
+    # Remove checkpoint on clean completion
+    if (Test-Path $checkpointFile) {
+        Remove-Item $checkpointFile -Force
+        Write-Host "`nCheckpoint cleared." -ForegroundColor DarkGray
+    }
 }
 
 #endregion
