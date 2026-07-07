@@ -44,6 +44,8 @@
         - PnP.PowerShell module installed (Tested with PNP 2.12.0)
         - PowerShell 7.4 or higer
         - Appropriate permissions granted to the Azure AD application
+            - Microsoft Graph| Application | User.Read.All 
+            - Microsoft Graph| Application | Group.Read.All
             - Microsoft Graph| Application | Directory.Read.All
             - SharePoint |Application | Sites.FullControl.All
         - Certificate-based authentication configured
